@@ -353,14 +353,9 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 
 	var vers []module.Version
 
-	// Reconcile dependencies declared by onRequire with the pinned versions
-	// from versions.json. The onRequire callback discovers dependencies
-	// dynamically (e.g., by parsing CMakeLists.txt), but may not know exact
-	// versions. For any dependency missing a version, we look it up in the
-	// versions.json dependency table for the current module version. If the
-	// dependency isn't found in the table either, it's safe to skip — the
-	// MVS algorithm resolves dependencies recursively, so it will be
-	// discovered and resolved through another path in the dependency graph.
+	// Reconcile onRequire deps with versions.json: fill in missing versions
+	// from the pinned table; unknown deps are safe to skip since MVS resolves
+	// them recursively through other paths in the dependency graph.
 	for _, dep := range deps.Deps() {
 		if dep.Version == "" {
 			idx := slices.IndexFunc(current, func(depInTable module.Version) bool {
