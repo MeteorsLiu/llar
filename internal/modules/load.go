@@ -42,8 +42,8 @@ type Options struct {
 	FormulaStore *repo.Store
 }
 
-func latestVersion(modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
-	tags, err := repo.Tags(context.TODO())
+func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
+	tags, err := repo.Tags(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -90,7 +90,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if err != nil {
 			return nil, err
 		}
-		latest, err := latestVersion(main.Path, latestRepo, cmp)
+		latest, err := latestVersion(ctx, main.Path, latestRepo, cmp)
 		if err != nil {
 			return nil, err
 		}
@@ -353,14 +353,15 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 
 	var vers []module.Version
 
+	// Reconcile onRequire deps with versions.json: fill in missing versions
+	// from the pinned table; unknown deps are safe to skip since MVS resolves
+	// them recursively through other paths in the dependency graph.
 	for _, dep := range deps.Deps() {
 		if dep.Version == "" {
-			// if a version of a dep input by onRequire is empty, try our best to resolve it.
 			idx := slices.IndexFunc(current, func(depInTable module.Version) bool {
 				return depInTable.Path == dep.Path
 			})
 			if idx < 0 {
-				// It seems safe to drop deps here, because we resolve deps recursively and finally we will find that dep.
 				continue
 			}
 			dep.Version = current[idx].Version
