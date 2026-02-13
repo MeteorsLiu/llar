@@ -38,19 +38,23 @@ func New(matrix formula.Matrix, workspaceDir, sourceDir, buildDir, installDir st
 // Source overrides the source directory.
 func (a *AutoTools) Source(dir string) { a.sourceDir = dir }
 
-// Env sets key=value for the current process and for every command spawned later.
+// Env sets key=value in the build environment.
+// The value is recorded in the instance and passed to every spawned command.
 func (a *AutoTools) Env(key, value string) {
 	a.env[key] = value
-	os.Setenv(key, value)
 }
 
-// Use adds include/lib/pkgconfig paths of a built dependency to the process environment.
+// Use adds include/lib/pkgconfig paths of a built dependency to the build environment.
 func (a *AutoTools) Use(mod module.Version) error {
 	escaped, err := module.EscapePath(mod.Path)
 	if err != nil {
 		return err
 	}
-	root := filepath.Join(a.workspaceDir, escaped+"-"+a.matrix.Combinations()[0])
+	combos := a.matrix.Combinations()
+	if len(combos) == 0 {
+		return fmt.Errorf("use %s@%s: matrix has no combinations", mod.Path, mod.Version)
+	}
+	root := filepath.Join(a.workspaceDir, escaped+"-"+combos[0])
 	if _, err := os.Stat(root); err != nil {
 		return fmt.Errorf("use %s@%s: %w", mod.Path, mod.Version, err)
 	}
@@ -59,30 +63,33 @@ func (a *AutoTools) Use(mod module.Version) error {
 	libDir := filepath.Join(root, "lib")
 	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
 
-	if _, err := os.Stat(pkgconfigDir); err == nil {
-		prependPath("PKG_CONFIG_PATH", pkgconfigDir)
+	includeExists := dirExists(includeDir)
+	libExists := dirExists(libDir)
+
+	if dirExists(pkgconfigDir) {
+		a.prependPath("PKG_CONFIG_PATH", pkgconfigDir)
 	}
-	prependPath("CMAKE_PREFIX_PATH", root)
-	if _, err := os.Stat(includeDir); err == nil {
-		prependPath("CMAKE_INCLUDE_PATH", includeDir)
+	a.prependPath("CMAKE_PREFIX_PATH", root)
+	if includeExists {
+		a.prependPath("CMAKE_INCLUDE_PATH", includeDir)
 	}
-	if _, err := os.Stat(libDir); err == nil {
-		prependPath("CMAKE_LIBRARY_PATH", libDir)
+	if libExists {
+		a.prependPath("CMAKE_LIBRARY_PATH", libDir)
 	}
 
 	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(includeDir); err == nil {
-			prependPath("INCLUDE", includeDir)
+		if includeExists {
+			a.prependPath("INCLUDE", includeDir)
 		}
-		if _, err := os.Stat(libDir); err == nil {
-			prependPath("LIB", libDir)
+		if libExists {
+			a.prependPath("LIB", libDir)
 		}
 	} else {
-		if _, err := os.Stat(includeDir); err == nil {
-			appendFlag("CPPFLAGS", "-I"+includeDir)
+		if includeExists {
+			a.appendFlag("CPPFLAGS", "-I"+includeDir)
 		}
-		if _, err := os.Stat(libDir); err == nil {
-			appendFlag("LDFLAGS", "-L"+libDir)
+		if libExists {
+			a.appendFlag("LDFLAGS", "-L"+libDir)
 		}
 	}
 	return nil
@@ -137,10 +144,11 @@ func (a *AutoTools) run(name string, args []string) error {
 	cmd.Dir = a.workDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if len(a.env) > 0 {
-		cmd.Env = mergeEnv(os.Environ(), a.env)
+	cmd.Env = mergeEnv(os.Environ(), a.env)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run %s in %s: %w", name, cmd.Dir, err)
 	}
-	return cmd.Run()
+	return nil
 }
 
 // mergeEnv returns base with every key in overrides replaced or appended.
@@ -161,22 +169,36 @@ func mergeEnv(base []string, overrides map[string]string) []string {
 	return base
 }
 
-// prependPath prepends value to a PATH-style env var.
-func prependPath(key, value string) {
+// getEnv returns the value of key from a.env, falling back to os.Getenv.
+func (a *AutoTools) getEnv(key string) string {
+	if v, ok := a.env[key]; ok {
+		return v
+	}
+	return os.Getenv(key)
+}
+
+// prependPath prepends value to a PATH-style env var in a.env.
+func (a *AutoTools) prependPath(key, value string) {
 	sep := ":"
 	if runtime.GOOS == "windows" {
 		sep = ";"
 	}
-	if cur := os.Getenv(key); cur != "" {
+	if cur := a.getEnv(key); cur != "" {
 		value += sep + cur
 	}
-	os.Setenv(key, value)
+	a.env[key] = value
 }
 
-// appendFlag appends a space-separated flag to an env var.
-func appendFlag(key, flag string) {
-	if cur := os.Getenv(key); cur != "" {
+// appendFlag appends a space-separated flag to an env var in a.env.
+func (a *AutoTools) appendFlag(key, flag string) {
+	if cur := a.getEnv(key); cur != "" {
 		flag = cur + " " + flag
 	}
-	os.Setenv(key, flag)
+	a.env[key] = flag
+}
+
+// dirExists reports whether path exists and is a directory.
+func dirExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
 }

@@ -27,13 +27,6 @@ func TestUseSetsEnv(t *testing.T) {
 		}
 	}
 
-	for _, key := range []string{
-		"PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH",
-		"CMAKE_LIBRARY_PATH", "INCLUDE", "LIB", "CPPFLAGS", "LDFLAGS",
-	} {
-		t.Setenv(key, "")
-	}
-
 	matrix := formula.Matrix{
 		Require: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
 	}
@@ -43,30 +36,31 @@ func TestUseSetsEnv(t *testing.T) {
 		t.Fatalf("Use: %v", err)
 	}
 
+	// Verify values are stored in a.env, not in the process environment.
 	for key, want := range map[string]string{
 		"PKG_CONFIG_PATH":    pkgconfigDir,
 		"CMAKE_PREFIX_PATH":  modBuildDir,
 		"CMAKE_INCLUDE_PATH": includeDir,
 		"CMAKE_LIBRARY_PATH": libDir,
 	} {
-		if got := os.Getenv(key); got != want {
-			t.Errorf("%s = %q, want %q", key, got, want)
+		if got := a.env[key]; got != want {
+			t.Errorf("env[%s] = %q, want %q", key, got, want)
 		}
 	}
 
 	if runtime.GOOS == "windows" {
-		if got := os.Getenv("INCLUDE"); got != includeDir {
-			t.Errorf("INCLUDE = %q, want %q", got, includeDir)
+		if got := a.env["INCLUDE"]; got != includeDir {
+			t.Errorf("env[INCLUDE] = %q, want %q", got, includeDir)
 		}
-		if got := os.Getenv("LIB"); got != libDir {
-			t.Errorf("LIB = %q, want %q", got, libDir)
+		if got := a.env["LIB"]; got != libDir {
+			t.Errorf("env[LIB] = %q, want %q", got, libDir)
 		}
 	} else {
-		if got := os.Getenv("CPPFLAGS"); strings.TrimSpace(got) != "-I"+includeDir {
-			t.Errorf("CPPFLAGS = %q, want %q", got, "-I"+includeDir)
+		if got := a.env["CPPFLAGS"]; strings.TrimSpace(got) != "-I"+includeDir {
+			t.Errorf("env[CPPFLAGS] = %q, want %q", got, "-I"+includeDir)
 		}
-		if got := os.Getenv("LDFLAGS"); strings.TrimSpace(got) != "-L"+libDir {
-			t.Errorf("LDFLAGS = %q, want %q", got, "-L"+libDir)
+		if got := a.env["LDFLAGS"]; strings.TrimSpace(got) != "-L"+libDir {
+			t.Errorf("env[LDFLAGS] = %q, want %q", got, "-L"+libDir)
 		}
 	}
 }
@@ -78,6 +72,17 @@ func TestUseNotFound(t *testing.T) {
 	a := New(matrix, t.TempDir(), "", "", "")
 	if err := a.Use(module.Version{Path: "no/such", Version: "1.0.0"}); err == nil {
 		t.Fatal("expected error for missing dependency dir")
+	}
+}
+
+func TestUseEmptyMatrix(t *testing.T) {
+	a := New(formula.Matrix{}, t.TempDir(), "", "", "")
+	err := a.Use(module.Version{Path: "dep", Version: "1.0.0"})
+	if err == nil {
+		t.Fatal("expected error for empty matrix")
+	}
+	if !strings.Contains(err.Error(), "no combinations") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -123,8 +128,6 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	t.Setenv("CUSTOM", "")
 
 	a := New(formula.Matrix{}, "", absSource, buildDir, installDir)
 	a.Env("CUSTOM", "VAL")
