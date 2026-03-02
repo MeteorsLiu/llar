@@ -326,6 +326,158 @@ func TestStore_LockModule_InvalidPath(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// localStore tests
+// ---------------------------------------------------------------------------
+
+func TestNewLocalStore(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewLocalStore(root)
+	if err != nil {
+		t.Fatalf("NewLocalStore() failed: %v", err)
+	}
+	if store == nil {
+		t.Fatal("NewLocalStore() returned nil")
+	}
+	s := store.(*localStore)
+	if s.root != root {
+		t.Errorf("root = %q, want %q", s.root, root)
+	}
+	if s.lockDir == "" {
+		t.Error("lockDir should not be empty")
+	}
+}
+
+func TestLocalStore_ModuleFS(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a formula directory under root
+	modDir := filepath.Join(root, "owner", "mylib")
+	if err := os.MkdirAll(modDir, 0755); err != nil {
+		t.Fatalf("failed to create module dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "versions.json"), []byte(`{"path":"owner/mylib","deps":{}}`), 0644); err != nil {
+		t.Fatalf("failed to write versions.json: %v", err)
+	}
+
+	store, err := NewLocalStore(root)
+	if err != nil {
+		t.Fatalf("NewLocalStore() failed: %v", err)
+	}
+
+	fsys, err := store.ModuleFS(context.Background(), "owner/mylib")
+	if err != nil {
+		t.Fatalf("ModuleFS() failed: %v", err)
+	}
+
+	// Verify the file is accessible via the returned FS
+	f, err := fsys.Open("versions.json")
+	if err != nil {
+		t.Fatalf("failed to open versions.json from FS: %v", err)
+	}
+	f.Close()
+}
+
+func TestLocalStore_ModuleFS_NonexistentDir(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewLocalStore(root)
+	if err != nil {
+		t.Fatalf("NewLocalStore() failed: %v", err)
+	}
+
+	// ModuleFS on a nonexistent path returns an FS (os.DirFS doesn't validate existence)
+	fsys, err := store.ModuleFS(context.Background(), "owner/nonexistent")
+	if err != nil {
+		t.Fatalf("ModuleFS() unexpected error: %v", err)
+	}
+
+	// But opening a file from it should fail
+	_, err = fsys.Open("versions.json")
+	if err == nil {
+		t.Error("expected error opening file in nonexistent dir")
+	}
+}
+
+func TestLocalStore_LockModule(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewLocalStore(root)
+	if err != nil {
+		t.Fatalf("NewLocalStore() failed: %v", err)
+	}
+
+	unlock, err := store.LockModule("owner/mylib")
+	if err != nil {
+		t.Fatalf("LockModule() failed: %v", err)
+	}
+	defer unlock()
+
+	// Verify lock file exists in lockDir (not in root)
+	s := store.(*localStore)
+	lockFile := filepath.Join(s.lockDir, "owner", "mylib", ".lock")
+	if _, err := os.Stat(lockFile); err != nil {
+		t.Errorf("lock file not created at %s: %v", lockFile, err)
+	}
+
+	// Verify lock file is NOT in the formula source root
+	sourceLockFile := filepath.Join(root, "owner", "mylib", ".lock")
+	if _, err := os.Stat(sourceLockFile); err == nil {
+		t.Error("lock file should not be created in formula source root")
+	}
+}
+
+func TestLocalStore_LockModule_Exclusive(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewLocalStore(root)
+	if err != nil {
+		t.Fatalf("NewLocalStore() failed: %v", err)
+	}
+
+	unlock, err := store.LockModule("owner/mylib")
+	if err != nil {
+		t.Fatalf("first LockModule() failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		unlock2, err := store.LockModule("owner/mylib")
+		if err != nil {
+			t.Errorf("second LockModule() failed: %v", err)
+			return
+		}
+		unlock2()
+	}()
+
+	select {
+	case <-done:
+		t.Error("second lock acquired before first was released")
+	case <-time.After(50 * time.Millisecond):
+		// expected: still blocked
+	}
+
+	unlock()
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(5 * time.Second):
+		t.Error("second lock not acquired after first was released")
+	}
+}
+
+func TestLocalStore_LockModule_InvalidPath(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewLocalStore(root)
+	if err != nil {
+		t.Fatalf("NewLocalStore() failed: %v", err)
+	}
+
+	_, err = store.LockModule("")
+	if err == nil {
+		t.Error("LockModule() expected error for empty path")
+	}
+}
+
 func TestStore_ModuleFS_RealRepo(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real repo test in short mode")
