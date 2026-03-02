@@ -101,7 +101,11 @@ func NewLocalStore(root string) (Store, error) {
 
 // ModuleFS returns an fs.FS rooted at the module's local formula directory.
 func (s *localStore) ModuleFS(_ context.Context, modPath string) (fs.FS, error) {
-	return os.DirFS(filepath.Join(s.root, modPath)), nil
+	escapedModPath, err := module.EscapePath(modPath)
+	if err != nil {
+		return nil, err
+	}
+	return os.DirFS(filepath.Join(s.root, escapedModPath)), nil
 }
 
 // LockModule acquires an exclusive lock for the given module path.

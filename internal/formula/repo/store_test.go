@@ -398,6 +398,24 @@ func TestLocalStore_ModuleFS_NonexistentDir(t *testing.T) {
 	}
 }
 
+func TestLocalStore_ModuleFS_InvalidPath(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewLocalStore(root)
+	if err != nil {
+		t.Fatalf("NewLocalStore() failed: %v", err)
+	}
+
+	tests := []string{"", "../../../etc", "owner//repo"}
+	for _, modPath := range tests {
+		t.Run(modPath, func(t *testing.T) {
+			_, err := store.ModuleFS(context.Background(), modPath)
+			if err == nil {
+				t.Errorf("ModuleFS() expected error for invalid module path %q", modPath)
+			}
+		})
+	}
+}
+
 func TestLocalStore_LockModule(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewLocalStore(root)
