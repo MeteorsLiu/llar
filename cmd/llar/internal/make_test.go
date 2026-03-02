@@ -10,29 +10,62 @@ import (
 	"testing"
 )
 
+// testdataFormulasDir returns the absolute path to testdata/formulas.
+func testdataFormulasDir(t *testing.T) string {
+	t.Helper()
+	// The test binary runs from the package directory.
+	abs, err := filepath.Abs("testdata/formulas")
+	if err != nil {
+		t.Fatalf("failed to resolve testdata path: %v", err)
+	}
+	return abs
+}
+
+// runMakeCmdInDir changes the working directory to dir, runs runMakeCmd,
+// then restores the original directory.
+func runMakeCmdInDir(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir %s: %v", dir, err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+	return runMakeCmd(t, args...)
+}
+
 func TestParseModuleArg(t *testing.T) {
 	tests := []struct {
 		arg         string
 		wantModPath string
 		wantVersion string
+		wantLocal   bool
 	}{
-		{"owner/repo@v1.0.0", "owner/repo", "v1.0.0"},
-		{"owner/repo@1.0.0", "owner/repo", "1.0.0"},
-		{"owner/repo", "owner/repo", ""},
-		{"org/owner/repo@v2.0.0", "org/owner/repo", "v2.0.0"},
-		{"simple@latest", "simple", "latest"},
-		{"no-version", "no-version", ""},
-		{"multiple@at@signs", "multiple@at", "signs"},
+		{"owner/repo@v1.0.0", "owner/repo", "v1.0.0", false},
+		{"owner/repo@1.0.0", "owner/repo", "1.0.0", false},
+		{"owner/repo", "owner/repo", "", false},
+		{"org/owner/repo@v2.0.0", "org/owner/repo", "v2.0.0", false},
+		{"simple@latest", "simple", "latest", false},
+		{"no-version", "no-version", "", false},
+		{"multiple@at@signs", "multiple@at", "signs", false},
+		{"./owner/repo@v1.0.0", "owner/repo", "v1.0.0", true},
+		{"./owner/repo", "owner/repo", "", true},
+		{"/abs/owner/repo@v1.0.0", "/abs/owner/repo", "v1.0.0", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.arg, func(t *testing.T) {
-			modPath, version := parseModuleArg(tt.arg)
+			modPath, version, isLocal := parseModuleArg(tt.arg)
 			if modPath != tt.wantModPath {
 				t.Errorf("parseModuleArg(%q) modPath = %q, want %q", tt.arg, modPath, tt.wantModPath)
 			}
 			if version != tt.wantVersion {
 				t.Errorf("parseModuleArg(%q) version = %q, want %q", tt.arg, version, tt.wantVersion)
+			}
+			if isLocal != tt.wantLocal {
+				t.Errorf("parseModuleArg(%q) isLocal = %v, want %v", tt.arg, isLocal, tt.wantLocal)
 			}
 		})
 	}
@@ -226,6 +259,105 @@ func TestOutputResult_NestedDirs(t *testing.T) {
 	}
 	if !found {
 		t.Error("zip missing a/b/c/deep.txt")
+	}
+}
+
+// TestRunMake_RemotePath_FailsAtLoad tests the non-local (remote) store setup path.
+// vcs.NewRepo for llarhub succeeds without network; modules.Load will fail when
+// trying to sync from remote, giving us "failed to load modules".
+func TestRunMake_RemotePath_FailsAtLoad(t *testing.T) {
+	_, err := runMakeCmd(t, "test/fakepkg@v1.0.0")
+	if err == nil {
+		t.Fatal("expected error for remote module, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to load modules") &&
+		!strings.Contains(err.Error(), "failed to build") &&
+		!strings.Contains(err.Error(), "failed to get formula dir") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestRunMake_LocalPath_ModulesLoad tests that runMake with a local path (./...)
+// correctly sets up the localStore and reaches modules.Load.
+// The formula is loaded from testdata/formulas; the build fails at repo.Sync
+// (network) but we verify we get past store setup and modules.Load.
+func TestRunMake_LocalPath_ModulesLoad(t *testing.T) {
+	formulasDir := testdataFormulasDir(t)
+	_, err := runMakeCmdInDir(t, formulasDir, "./test/fakepkg@v1.0.0")
+	// Expect failure at builder.Build (network/source sync), not at store setup.
+	// Must NOT be a "failed to create local formula store" or "failed to load modules" error.
+	if err == nil {
+		t.Fatal("expected build error (network), got nil")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "failed to create local formula store") {
+		t.Errorf("failed at local store creation: %v", err)
+	}
+	if strings.Contains(msg, "failed to load modules") {
+		t.Errorf("failed at modules.Load: %v", err)
+	}
+}
+
+// TestRunMake_LocalPath_NoFormula tests that a missing formula dir produces
+// a "failed to load modules" error (not a panic or store error).
+func TestRunMake_LocalPath_NoFormula(t *testing.T) {
+	formulasDir := testdataFormulasDir(t)
+	_, err := runMakeCmdInDir(t, formulasDir, "./owner/nonexistent@v1.0.0")
+	if err == nil {
+		t.Fatal("expected error for nonexistent formula, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to load modules") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestRunMake_LocalPath_Silent tests that the silent (non-verbose) code path
+// is exercised with a local formula.
+func TestRunMake_LocalPath_Silent(t *testing.T) {
+	formulasDir := testdataFormulasDir(t)
+
+	// Force non-verbose mode via the flag
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(formulasDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(orig) })
+
+	// Reset to non-verbose (default)
+	makeVerbose = false
+	makeOutput = ""
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	rootCmd.SetArgs([]string{"make", "./test/fakepkg@v1.0.0"})
+	runErr := rootCmd.Execute()
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+
+	// We expect a build error (network), not a devnull setup error
+	if runErr != nil && strings.Contains(runErr.Error(), "failed to open devnull") {
+		t.Errorf("devnull open failed: %v", runErr)
+	}
+}
+
+// TestRunMake_LocalPath_WithOutput tests that -o flag resolves to absolute path
+// before build (the abs resolution code path).
+func TestRunMake_LocalPath_WithOutput(t *testing.T) {
+	formulasDir := testdataFormulasDir(t)
+	dest := filepath.Join(t.TempDir(), "out.zip")
+	_, err := runMakeCmdInDir(t, formulasDir, "-o", dest, "./test/fakepkg@v1.0.0")
+	// Expect failure at build (network), not at output path resolution
+	if err != nil && strings.Contains(err.Error(), "failed to resolve output path") {
+		t.Errorf("output path resolution failed: %v", err)
 	}
 }
 

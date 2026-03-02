@@ -37,20 +37,32 @@ func init() {
 }
 
 func runMake(cmd *cobra.Command, args []string) error {
-	modPath, version := parseModuleArg(args[0])
+	modPath, version, isLocal := parseModuleArg(args[0])
 
 	ctx := context.Background()
 
 	// Set up formula store
-	formulaDir, err := repo.DefaultDir()
-	if err != nil {
-		return fmt.Errorf("failed to get formula dir: %w", err)
+	var store repo.Store
+	if isLocal {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get working directory: %w", err)
+		}
+		store, err = repo.NewLocalStore(cwd)
+		if err != nil {
+			return fmt.Errorf("failed to create local formula store: %w", err)
+		}
+	} else {
+		formulaDir, err := repo.DefaultDir()
+		if err != nil {
+			return fmt.Errorf("failed to get formula dir: %w", err)
+		}
+		formulaRepo, err := vcs.NewRepo("github.com/goplus/llarhub")
+		if err != nil {
+			return err
+		}
+		store = repo.New(formulaDir, formulaRepo)
 	}
-	formulaRepo, err := vcs.NewRepo("github.com/goplus/llarhub")
-	if err != nil {
-		return err
-	}
-	store := repo.New(formulaDir, formulaRepo)
 
 	// Load modules
 	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
@@ -149,14 +161,20 @@ func runMake(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// parseModuleArg parses a module argument in the form "owner/repo@version" or "owner/repo".
-func parseModuleArg(arg string) (modPath, version string) {
+// parseModuleArg parses a module argument in the form "owner/repo@version", "owner/repo",
+// "./owner/repo@version", or "./owner/repo". The isLocal flag is true when the argument
+// starts with "./" or "/", indicating a local formula directory should be used.
+func parseModuleArg(arg string) (modPath, version string, isLocal bool) {
+	if strings.HasPrefix(arg, "./") || strings.HasPrefix(arg, "/") {
+		isLocal = true
+		arg = strings.TrimPrefix(arg, "./")
+	}
 	for i := len(arg) - 1; i >= 0; i-- {
 		if arg[i] == '@' {
-			return arg[:i], arg[i+1:]
+			return arg[:i], arg[i+1:], isLocal
 		}
 	}
-	return arg, ""
+	return arg, "", isLocal
 }
 
 // outputResult writes the build output to dest.
