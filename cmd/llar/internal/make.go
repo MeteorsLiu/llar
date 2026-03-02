@@ -163,9 +163,11 @@ func runMake(cmd *cobra.Command, args []string) error {
 
 // parseModuleArg parses a module argument in the form "owner/repo@version", "owner/repo",
 // "./owner/repo@version", or "./owner/repo". The isLocal flag is true when the argument
-// starts with "./" or "/", indicating a local formula directory should be used.
+// starts with "./", indicating the formula should be resolved relative to the current
+// working directory. Absolute paths (starting with "/") are not supported as local paths
+// because the repo root cannot be inferred from them.
 func parseModuleArg(arg string) (modPath, version string, isLocal bool) {
-	if strings.HasPrefix(arg, "./") || strings.HasPrefix(arg, "/") {
+	if strings.HasPrefix(arg, "./") {
 		isLocal = true
 		arg = strings.TrimPrefix(arg, "./")
 	}

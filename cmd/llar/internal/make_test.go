@@ -52,7 +52,7 @@ func TestParseModuleArg(t *testing.T) {
 		{"multiple@at@signs", "multiple@at", "signs", false},
 		{"./owner/repo@v1.0.0", "owner/repo", "v1.0.0", true},
 		{"./owner/repo", "owner/repo", "", true},
-		{"/abs/owner/repo@v1.0.0", "/abs/owner/repo", "v1.0.0", true},
+		{"/abs/owner/repo@v1.0.0", "/abs/owner/repo", "v1.0.0", false},
 	}
 
 	for _, tt := range tests {
@@ -311,12 +311,12 @@ func TestRunMake_LocalPath_NoFormula(t *testing.T) {
 	}
 }
 
-// TestRunMake_LocalPath_Silent tests that the silent (non-verbose) code path
-// is exercised with a local formula.
+// TestRunMake_LocalPath_Silent tests the silent (non-verbose) code path with a local formula.
+// The build fails at source sync (network) but we verify the error is a build error,
+// not a devnull setup failure.
 func TestRunMake_LocalPath_Silent(t *testing.T) {
 	formulasDir := testdataFormulasDir(t)
 
-	// Force non-verbose mode via the flag
 	orig, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -326,7 +326,6 @@ func TestRunMake_LocalPath_Silent(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chdir(orig) })
 
-	// Reset to non-verbose (default)
 	makeVerbose = false
 	makeOutput = ""
 
@@ -343,9 +342,18 @@ func TestRunMake_LocalPath_Silent(t *testing.T) {
 	var buf bytes.Buffer
 	io.Copy(&buf, r)
 
-	// We expect a build error (network), not a devnull setup error
-	if runErr != nil && strings.Contains(runErr.Error(), "failed to open devnull") {
-		t.Errorf("devnull open failed: %v", runErr)
+	if runErr == nil {
+		t.Fatal("expected build error (network), got nil")
+	}
+	msg := runErr.Error()
+	if strings.Contains(msg, "failed to open devnull") {
+		t.Errorf("devnull open failed unexpectedly: %v", runErr)
+	}
+	if strings.Contains(msg, "failed to create local formula store") {
+		t.Errorf("failed at local store creation: %v", runErr)
+	}
+	if strings.Contains(msg, "failed to load modules") {
+		t.Errorf("failed at modules.Load: %v", runErr)
 	}
 }
 
