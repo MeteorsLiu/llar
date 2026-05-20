@@ -29,7 +29,7 @@ It does not cover broad build tools such as Conan-style `tool_requires`, framewo
 - libc and related system libraries;
 - target pkg-config roots.
 
-The sysroot is not owned by `crosscompile`. For Linux MVP, the sysroot comes from the official package named `glibc`.
+The sysroot is not owned by `crosscompile`. For Linux MVP, the default sysroot comes from the official package named `glibc`. Other target operating systems must not reuse the Linux `glibc` rule.
 
 ## High-Level Flow
 
@@ -78,6 +78,7 @@ arm64       -> arch=arm64, no os
 Rules:
 
 - `os=linux`: inject default `glibc` and use its output directory as default sysroot.
+- `os=darwin`: do not inject `glibc`. Darwin/macOS targets need an Apple SDK-style sysroot, which is a separate policy and not part of the Linux `glibc` default.
 - no `os`: do not inject `glibc` and do not use a default sysroot. This covers freestanding and embedded targets.
 - Matrix does not encode libc version.
 - Matrix does not encode user toolchain choice.
@@ -93,6 +94,8 @@ amd64-linux -> x86_64-linux-gnu
 
 `glibc` is the official default Linux sysroot package name. It is intentionally written as `glibc`, not as `goplus/glibc` or another namespaced module path.
 
+This rule applies only to Linux targets. Darwin/macOS targets, embedded targets, and targets without an `os` field do not receive a hidden `glibc` dependency.
+
 Implementation must account for the current module path rules if they require namespaced paths. The design requirement is that the official default sysroot package is addressed as `glibc`.
 
 Dependency rules:
@@ -100,7 +103,7 @@ Dependency rules:
 - Linux targets receive a hidden default dependency on `glibc@<default>`.
 - If formulas explicitly require `glibc@x`, the explicit requirement participates in dependency/version selection with the default requirement.
 - The selected `glibc` version becomes part of the downstream package build variant and cache key.
-- If no `os` exists in the matrix, no hidden `glibc` dependency is injected.
+- If the target OS is not Linux, or if no `os` exists in the matrix, no hidden `glibc` dependency is injected.
 
 The `glibc` package can be implemented as a normal formula that uses `ctx.currentMatrix()` to produce the target sysroot for that matrix. MVP can use prebuilt sysroot assets rather than building glibc from source.
 
@@ -110,7 +113,7 @@ Sysroot priority:
 
 ```text
 1. helper explicit Sysroot(root)
-2. default selected glibc output directory
+2. target-OS default sysroot, such as selected `glibc` output directory for Linux
 3. no sysroot
 ```
 
@@ -123,7 +126,7 @@ func (a *AutoTools) Sysroot(root string)
 
 These APIs are overrides, not the ordinary path. Most formulas should not call them.
 
-The build layer owns the default sysroot context because it knows the selected `glibc` output directory. Helpers can own explicit override state because the formula called `Sysroot(root)` on that helper instance.
+The build layer owns the default sysroot context because it knows the selected target-OS default sysroot, such as the selected `glibc` output directory for Linux. Helpers can own explicit override state because the formula called `Sysroot(root)` on that helper instance.
 
 Explicit override mechanics:
 
@@ -302,6 +305,7 @@ Failures before formula execution:
 - extraction/cache failure;
 - Linux target cannot resolve/build selected `glibc`;
 - Linux downstream build has no selected `glibc` output directory when default sysroot is expected.
+- Darwin/macOS targets are not covered by the Linux default sysroot rule; if they need a sysroot in MVP, formula code must use explicit `Sysroot(root)` or the build must fail with a target-OS-specific unsupported message.
 
 Errors should mention the matrix, build platform, target platform, and selected toolchain or `glibc` version when relevant.
 
@@ -310,6 +314,7 @@ Errors should mention the matrix, build platform, target platform, and selected 
 Required coverage:
 
 - Linux matrix injects hidden `glibc`.
+- Darwin/macOS matrix does not inject hidden `glibc`.
 - Matrix without `os` does not inject `glibc`.
 - Explicit `glibc` requirement participates in version selection with the default.
 - Selected `glibc` output directory becomes the default sysroot.
