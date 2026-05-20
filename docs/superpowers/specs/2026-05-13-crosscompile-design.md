@@ -2,13 +2,13 @@
 
 ## Goal
 
-LLAR should support hidden cross-platform C/C++ builds without requiring ordinary formula authors to know about compiler toolchains or sysroot wiring. The build matrix selects the target platform. LLAR supplies the default Linux sysroot and the cross compiler automatically, while still allowing a formula to explicitly override the sysroot when a package needs a special one.
+LLAR should support hidden cross-platform C/C++ builds without requiring ordinary formula authors to know about compiler toolchains or sysroot wiring. The build matrix selects the target platform. Native builds use the system libc or SDK normally. Cross builds receive the target sysroot and cross compiler automatically when LLAR has a target-OS policy for them, while still allowing a formula to explicitly override the sysroot when a package needs a special one.
 
 This design is scoped to narrow cross compilation:
 
 - managed LLVM compiler tools;
 - compiler/binutils/target injection;
-- default Linux `glibc` sysroot selection;
+- cross-Linux default `glibc` sysroot selection;
 - CMake and Autotools command injection.
 
 It does not cover broad build tools such as Conan-style `tool_requires`, framework SDKs such as ESP-IDF, or user-specified custom toolchains. The internal cross compiler selector should leave room for custom toolchains later, but MVP only implements LLAR-managed LLVM.
@@ -29,17 +29,17 @@ It does not cover broad build tools such as Conan-style `tool_requires`, framewo
 - libc and related system libraries;
 - target pkg-config roots.
 
-The sysroot is not owned by `crosscompile`. For Linux MVP, the default sysroot comes from the official package named `glibc`. Other target operating systems must not reuse the Linux `glibc` rule.
+The sysroot is not owned by `crosscompile`. Native builds use the system libc or SDK. For cross-Linux MVP, the default sysroot comes from the official package named `glibc`. Other target operating systems must not reuse the Linux `glibc` rule.
 
 ## High-Level Flow
 
-For a Linux target matrix such as:
+For a cross-Linux target matrix such as:
 
 ```text
 arm64-linux
 ```
 
-LLAR does the following:
+when the build platform is not Linux arm64, LLAR does the following:
 
 1. Parse the matrix as target `os=linux`, `arch=arm64`.
 2. Inject a hidden default dependency on `glibc@<default>`, unless dependency resolution already selects an explicit `glibc` version.
@@ -75,13 +75,17 @@ arm64-linux -> os=linux, arch=arm64
 arm64       -> arch=arm64, no os
 ```
 
-Rules:
+The matrix does not encode libc version or user toolchain choice.
 
-- `os=linux`: inject default `glibc` and use its output directory as default sysroot.
-- `os=darwin`: do not inject `glibc`. Darwin/macOS targets need an Apple SDK-style sysroot, which is a separate policy and not part of the Linux `glibc` default.
-- no `os`: do not inject `glibc` and do not use a default sysroot. This covers freestanding and embedded targets.
-- Matrix does not encode libc version.
-- Matrix does not encode user toolchain choice.
+Native build rule:
+
+- if build platform equals target platform, LLAR does not inject a default sysroot package. The system libc or SDK is used by the host toolchain as usual.
+
+Cross build rules:
+
+- `target os=linux`: inject default `glibc` and use its output directory as default sysroot.
+- `target os=darwin`: do not inject `glibc`. MVP does not auto-download an Apple SDK. A future Apple SDK locator package/provider can resolve an SDK path from user-authorized Xcode/Command Line Tools downloads, a predownloaded cache, or local configuration.
+- no target `os`: do not inject `glibc` and do not use a default sysroot. This covers freestanding and embedded targets.
 
 For MVP, target triple is derived from matrix `os/arch` for Linux targets:
 
@@ -92,18 +96,18 @@ amd64-linux -> x86_64-linux-gnu
 
 ## Default `glibc`
 
-`glibc` is the official default Linux sysroot package name. It is intentionally written as `glibc`, not as `goplus/glibc` or another namespaced module path.
+`glibc` is the official default cross-Linux sysroot package name. It is intentionally written as `glibc`, not as `goplus/glibc` or another namespaced module path.
 
-This rule applies only to Linux targets. Darwin/macOS targets, embedded targets, and targets without an `os` field do not receive a hidden `glibc` dependency.
+This rule applies only to cross-Linux targets. Native Linux builds use the system libc. Darwin/macOS targets, embedded targets, and targets without an `os` field do not receive a hidden `glibc` dependency.
 
 Implementation must account for the current module path rules if they require namespaced paths. The design requirement is that the official default sysroot package is addressed as `glibc`.
 
 Dependency rules:
 
-- Linux targets receive a hidden default dependency on `glibc@<default>`.
+- Cross-Linux targets receive a hidden default dependency on `glibc@<default>`.
 - If formulas explicitly require `glibc@x`, the explicit requirement participates in dependency/version selection with the default requirement.
 - The selected `glibc` version becomes part of the downstream package build variant and cache key.
-- If the target OS is not Linux, or if no `os` exists in the matrix, no hidden `glibc` dependency is injected.
+- If the build is native, if the target OS is not Linux, or if no `os` exists in the matrix, no hidden `glibc` dependency is injected.
 
 The `glibc` package can be implemented as a normal formula that uses `ctx.currentMatrix()` to produce the target sysroot for that matrix. MVP can use prebuilt sysroot assets rather than building glibc from source.
 
@@ -288,10 +292,10 @@ Package build cache keys must include more than `version-matrix` when hidden sys
 At minimum, cache variant must include:
 
 - matrix;
-- selected `glibc` version when a default or explicit `glibc` sysroot is active;
+- selected `glibc` version when a cross-Linux default or explicit `glibc` sysroot is active;
 - managed LLVM toolchain identity/version/digest when cross compilation is active.
 
-This prevents reusing artifacts built with a previous default `glibc` or previous managed LLVM.
+This prevents reusing artifacts built with a previous cross-Linux default `glibc` or previous managed LLVM.
 
 ## Error Handling
 
@@ -303,8 +307,8 @@ Failures before formula execution:
 - download failure;
 - checksum failure;
 - extraction/cache failure;
-- Linux target cannot resolve/build selected `glibc`;
-- Linux downstream build has no selected `glibc` output directory when default sysroot is expected.
+- cross-Linux target cannot resolve/build selected `glibc`;
+- cross-Linux downstream build has no selected `glibc` output directory when default sysroot is expected.
 - Darwin/macOS targets are not covered by the Linux default sysroot rule; if they need a sysroot in MVP, formula code must use explicit `Sysroot(root)` or the build must fail with a target-OS-specific unsupported message.
 
 Errors should mention the matrix, build platform, target platform, and selected toolchain or `glibc` version when relevant.
@@ -313,7 +317,7 @@ Errors should mention the matrix, build platform, target platform, and selected 
 
 Required coverage:
 
-- Linux matrix injects hidden `glibc`.
+- cross-Linux matrix injects hidden `glibc`.
 - Darwin/macOS matrix does not inject hidden `glibc`.
 - Matrix without `os` does not inject `glibc`.
 - Explicit `glibc` requirement participates in version selection with the default.
