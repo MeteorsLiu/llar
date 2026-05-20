@@ -43,8 +43,8 @@ when the build platform is not Linux arm64, LLAR does the following:
 
 1. Parse the matrix as target `os=linux`, `arch=arm64`.
 2. Inject a hidden default dependency on `glibc@<default>`, unless dependency resolution already selects an explicit `glibc` version.
-3. Build `glibc` using the same matrix. The `glibc` formula produces a Linux arm64 sysroot in its output directory.
-4. Build downstream packages with the selected `glibc` output directory as the default sysroot.
+3. Build `glibc` using the same matrix. The `glibc` formula produces a Linux arm64 sysroot and records its sysroot flags in `BuildResult.Metadata`, for example `--sysroot=<glibc-output-dir>`.
+4. Build downstream packages with the selected `glibc` metadata as the default sysroot metadata.
 5. Download/cache the LLAR-managed LLVM toolchain for the build platform.
 6. Install `execbroker` middleware while formula build hooks run.
 7. Patch CMake/Autotools/compiler commands with both compiler settings and the active sysroot.
@@ -61,10 +61,10 @@ c.install()
 If a package needs a special sysroot, it can override the default:
 
 ```go
-c.Sysroot(customRoot)
+c.Sysroot(customSysrootMetadata)
 ```
 
-Explicit sysroot wins over the default `glibc` sysroot.
+Explicit sysroot metadata wins over the default `glibc` sysroot metadata.
 
 ## Matrix Semantics
 
@@ -83,7 +83,7 @@ Native build rule:
 
 Cross build rules:
 
-- `target os=linux`: inject default `glibc` and use its output directory as default sysroot.
+- `target os=linux`: inject default `glibc` and use its build metadata as default sysroot metadata.
 - `target os=darwin`: do not inject `glibc`. MVP does not auto-download an Apple SDK. A future Apple SDK locator package/provider can resolve an SDK path from user-authorized Xcode/Command Line Tools downloads, a predownloaded cache, or local configuration.
 - no target `os`: do not inject `glibc` and do not use a default sysroot. This covers freestanding and embedded targets.
 
@@ -109,34 +109,34 @@ Dependency rules:
 - The selected `glibc` version becomes part of the downstream package build variant and cache key.
 - If the build is native, if the target OS is not Linux, or if no `os` exists in the matrix, no hidden `glibc` dependency is injected.
 
-The `glibc` package can be implemented as a normal formula that uses `ctx.currentMatrix()` to produce the target sysroot for that matrix. MVP can use prebuilt sysroot assets rather than building glibc from source.
+The `glibc` package can be implemented as a normal formula that uses `ctx.currentMatrix()` to produce the target sysroot for that matrix. MVP can use prebuilt sysroot assets rather than building glibc from source. Its `BuildResult.Metadata` must contain the sysroot flags that downstream builds should inherit, such as `--sysroot=<output-dir>`.
 
 ## Sysroot Selection
 
 Sysroot priority:
 
 ```text
-1. helper explicit Sysroot(root)
-2. target-OS default sysroot, such as selected `glibc` output directory for Linux
+1. helper explicit Sysroot(metadata)
+2. target-OS default sysroot metadata, such as selected `glibc` BuildResult.Metadata for cross-Linux
 3. no sysroot
 ```
 
 `x/cmake` and `x/autotools` should expose:
 
 ```go
-func (c *CMake) Sysroot(root string)
-func (a *AutoTools) Sysroot(root string)
+func (c *CMake) Sysroot(metadata string)
+func (a *AutoTools) Sysroot(metadata string)
 ```
 
 These APIs are overrides, not the ordinary path. Most formulas should not call them.
 
-The build layer owns the default sysroot context because it knows the selected target-OS default sysroot, such as the selected `glibc` output directory for Linux. Helpers can own explicit override state because the formula called `Sysroot(root)` on that helper instance.
+The build layer owns the default sysroot context because it knows the selected target-OS default sysroot metadata, such as the selected `glibc` build metadata for cross-Linux. Helpers can own explicit override state because the formula called `Sysroot(metadata)` on that helper instance.
 
 Explicit override mechanics:
 
-- `CMake.Sysroot(root)` appends an explicit `CMAKE_SYSROOT` setting during configure. Build middleware must not add the default `glibc` sysroot when the CMake configure command already carries an explicit `CMAKE_SYSROOT`.
-- `AutoTools.Sysroot(root)` applies explicit sysroot environment after `execbroker.Command` returns, so helper-local values override default middleware values on the final `exec.Cmd`.
-- Direct `exec.Command` calls have no helper-local override. They receive only the build default sysroot, if one is active.
+- `CMake.Sysroot(metadata)` applies explicit sysroot metadata to configure/build command environments. Build middleware must not add the default `glibc` sysroot metadata when helper-local sysroot metadata is present.
+- `AutoTools.Sysroot(metadata)` applies explicit sysroot metadata after `execbroker.Command` returns, so helper-local values override default middleware values on the final `exec.Cmd`.
+- Direct `exec.Command` calls have no helper-local override. They receive only the build default sysroot metadata, if one is active.
 
 ## Crosscompile Module
 
@@ -216,7 +216,7 @@ restore := execbroker.SetMiddleware(func(req execbroker.Request) execbroker.Requ
 defer restore()
 ```
 
-`crosscompile` returns compiler/binutils/target patch. `internal/build` supplies the default sysroot patch. `x/cmake` and `x/autotools` explicit `Sysroot(root)` overrides must win over the default sysroot.
+`crosscompile` returns compiler/binutils/target patch. `internal/build` supplies the default sysroot metadata patch. `x/cmake` and `x/autotools` explicit `Sysroot(metadata)` overrides must win over the default sysroot metadata.
 
 ### CMake
 
@@ -236,13 +236,17 @@ set(CMAKE_RANLIB <managed-llvm-ranlib>)
 set(CMAKE_STRIP <managed-llvm-strip>)
 ```
 
-If an active sysroot exists, CMake also receives:
+If active sysroot metadata exists, CMake configure/build commands receive that metadata through compile and link flag environment:
 
-```cmake
-set(CMAKE_SYSROOT <sysroot>)
+```text
+CFLAGS   += <sysroot-metadata>
+CXXFLAGS += <sysroot-metadata>
+LDFLAGS  += <sysroot-metadata>
 ```
 
-If the formula explicitly sets `CMAKE_TOOLCHAIN_FILE`, LLAR must not overwrite it. In that case MVP may still append `CMAKE_SYSROOT` when an active sysroot exists, but compiler/toolchain correctness is the formula's responsibility because LLAR cannot merge its managed LLVM settings into an arbitrary user toolchain file.
+For example, `glibc` can emit `--sysroot=<glibc-output-dir>` and an Apple SDK package can emit `-isysroot <sdk-path>`. MVP does not need to parse these flags into `CMAKE_SYSROOT`; a later refinement can do that if CMake projects need more structured sysroot handling.
+
+If the formula explicitly sets `CMAKE_TOOLCHAIN_FILE`, LLAR must not overwrite it. Sysroot metadata can still flow through flags, but compiler/toolchain correctness is the formula's responsibility because LLAR cannot merge its managed LLVM settings into an arbitrary user toolchain file.
 
 Because current LLAR source directories are temporary per build, MVP does not add extra CMake build-directory isolation. If LLAR later introduces stable source caching, CMake build directories must include a matrix/toolchain/sysroot variant to avoid stale `CMakeCache.txt`.
 
@@ -262,15 +266,13 @@ CXXFLAGS += --target=<triple>
 --build=<build-triple>
 ```
 
-If an active sysroot exists, Autotools/compiler environment also receives:
+If active sysroot metadata exists, Autotools/compiler environment also receives:
 
 ```text
-CPPFLAGS += --sysroot=<sysroot>
-CFLAGS   += --sysroot=<sysroot>
-CXXFLAGS += --sysroot=<sysroot>
-LDFLAGS  += --sysroot=<sysroot>
-PKG_CONFIG_SYSROOT_DIR=<sysroot>
-PKG_CONFIG_LIBDIR=<sysroot>/usr/lib/pkgconfig:<sysroot>/usr/share/pkgconfig:<sysroot>/lib/pkgconfig
+CPPFLAGS += <sysroot-metadata>
+CFLAGS   += <sysroot-metadata>
+CXXFLAGS += <sysroot-metadata>
+LDFLAGS  += <sysroot-metadata>
 ```
 
 ### Direct Compiler Commands
@@ -278,8 +280,8 @@ PKG_CONFIG_LIBDIR=<sysroot>/usr/lib/pkgconfig:<sysroot>/usr/share/pkgconfig:<sys
 For direct compiler/binutils commands:
 
 ```text
-cc, gcc  -> managed clang + --target=<triple> [+ --sysroot=<sysroot>]
-c++, g++ -> managed clang++ + --target=<triple> [+ --sysroot=<sysroot>]
+cc, gcc  -> managed clang + --target=<triple> [+ active sysroot metadata]
+c++, g++ -> managed clang++ + --target=<triple> [+ active sysroot metadata]
 ar       -> managed llvm-ar
 ranlib   -> managed llvm-ranlib
 strip    -> managed llvm-strip
@@ -308,8 +310,8 @@ Failures before formula execution:
 - checksum failure;
 - extraction/cache failure;
 - cross-Linux target cannot resolve/build selected `glibc`;
-- cross-Linux downstream build has no selected `glibc` output directory when default sysroot is expected.
-- Darwin/macOS targets are not covered by the Linux default sysroot rule; if they need a sysroot in MVP, formula code must use explicit `Sysroot(root)` or the build must fail with a target-OS-specific unsupported message.
+- cross-Linux downstream build has no selected `glibc` metadata when default sysroot metadata is expected.
+- Darwin/macOS targets are not covered by the Linux default sysroot rule; if they need a sysroot in MVP, formula code must use explicit `Sysroot(metadata)` or the build must fail with a target-OS-specific unsupported message.
 
 Errors should mention the matrix, build platform, target platform, and selected toolchain or `glibc` version when relevant.
 
@@ -321,11 +323,11 @@ Required coverage:
 - Darwin/macOS matrix does not inject hidden `glibc`.
 - Matrix without `os` does not inject `glibc`.
 - Explicit `glibc` requirement participates in version selection with the default.
-- Selected `glibc` output directory becomes the default sysroot.
-- Explicit `CMake.Sysroot`/`AutoTools.Sysroot` overrides default sysroot.
+- Selected `glibc` metadata becomes the default sysroot metadata.
+- Explicit `CMake.Sysroot`/`AutoTools.Sysroot` metadata overrides default sysroot metadata.
 - Cache variant changes when selected `glibc` version changes.
 - Cache variant changes when managed LLVM identity changes.
-- CMake injection includes compiler target and `CMAKE_SYSROOT`.
-- Autotools injection includes `--host`, compiler target flags, and sysroot flags.
+- CMake injection includes compiler target and sysroot metadata flags.
+- Autotools injection includes `--host`, compiler target flags, and sysroot metadata flags.
 - Direct compiler commands receive managed compiler and target flags.
 - `internal/build/crosscompile` does not import `internal/execbroker`.
