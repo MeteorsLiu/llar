@@ -3,9 +3,10 @@ package autotools
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+
+	"github.com/goplus/llar/internal/execbroker"
 )
 
 // AutoTools drives Autotools-style builds.
@@ -108,7 +109,7 @@ func (a *AutoTools) workDir() string {
 }
 
 func (a *AutoTools) run(name string, args []string) error {
-	cmd := exec.Command(name, args...)
+	cmd := execbroker.Command(name, args...)
 	cmd.Dir = a.workDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

@@ -15,6 +15,7 @@ import (
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
 	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/execbroker"
 
 	_ "github.com/goplus/llar/internal/ixgo"
 )
@@ -74,6 +75,8 @@ type Formula struct {
 func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	// Create a new ixgo interpreter context
 	ctx := ixgo.NewContext(0)
+	ctx.RegisterExternal("os/exec.Command", execbroker.Command)
+	ctx.RegisterExternal("os/exec.CommandContext", execbroker.CommandContext)
 
 	// Read the raw DSL content from the .gox file
 	content, err := fs.ReadFile(path)

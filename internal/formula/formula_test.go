@@ -5,11 +5,13 @@
 package formula
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"testing"
 
 	formulapkg "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/execbroker"
 )
 
 func TestLoadFS(t *testing.T) {
@@ -79,6 +81,63 @@ func TestFormula_SetStderr(t *testing.T) {
 	var buf []byte
 	formula.SetStderr(&mockWriter{buf: &buf})
 	formula.SetStderr(nil)
+}
+
+func TestLoadFSRegistersExecBroker(t *testing.T) {
+	tmpDir := t.TempDir()
+	const content = `import "os/exec"
+
+id "test/execbroker"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	data, err := exec.command("llar-missing-command").output()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	out.setMetadata string(data)
+}
+`
+	if err := os.WriteFile(tmpDir+"/broker_llar.gox", []byte(content), 0o644); err != nil {
+		t.Fatalf("write formula: %v", err)
+	}
+
+	restore := execbroker.SetMiddleware(func(req execbroker.Request) execbroker.Request {
+		if req.Name == "llar-missing-command" {
+			req.Name = os.Args[0]
+			req.Args = []string{"-test.run=TestFormulaExecBrokerHelperProcess"}
+			req.Env = append(os.Environ(),
+				"LLAR_FORMULA_EXECBROKER_HELPER=1",
+				"LLAR_FORMULA_EXECBROKER_VALUE=formula-broker",
+			)
+		}
+		return req
+	})
+	defer restore()
+
+	formula, err := loadFS(os.DirFS(tmpDir).(fs.ReadFileFS), "broker_llar.gox")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	result := &formulapkg.BuildResult{}
+	formula.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, result)
+	if errs := result.Errs(); len(errs) != 0 {
+		t.Fatalf("OnBuild errors: %v", errs)
+	}
+	if got := result.Metadata(); got != "formula-broker" {
+		t.Fatalf("metadata = %q, want formula-broker", got)
+	}
+}
+
+func TestFormulaExecBrokerHelperProcess(t *testing.T) {
+	if os.Getenv("LLAR_FORMULA_EXECBROKER_HELPER") != "1" {
+		return
+	}
+	fmt.Print(os.Getenv("LLAR_FORMULA_EXECBROKER_VALUE"))
+	os.Exit(0)
 }
 
 type mockWriter struct {

@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/goplus/llar/internal/execbroker"
 )
 
 func TestUseSetsEnv(t *testing.T) {
@@ -148,6 +150,22 @@ func TestAppendFlag(t *testing.T) {
 
 	if got := os.Getenv("TEST_FLAGS"); got != "-Ifoo -Ibar" {
 		t.Errorf("TEST_FLAGS = %q, want %q", got, "-Ifoo -Ibar")
+	}
+}
+
+func TestRunUsesExecBroker(t *testing.T) {
+	restore := execbroker.SetMiddleware(func(req execbroker.Request) execbroker.Request {
+		if req.Name != "llar-missing-command" {
+			t.Fatalf("Name = %q, want llar-missing-command", req.Name)
+		}
+		req.Name = "go"
+		req.Args = []string{"version"}
+		return req
+	})
+	defer restore()
+
+	if err := New("", "", "").run("llar-missing-command", nil); err != nil {
+		t.Fatalf("run: %v", err)
 	}
 }
 
