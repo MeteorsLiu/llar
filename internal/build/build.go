@@ -7,12 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	classfile "github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/build/buildtarget"
 	"github.com/goplus/llar/internal/build/crosscompile"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
@@ -20,8 +18,6 @@ import (
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
-
-const explicitSysrootEnv = "LLAR_EXECBROKER_SYSROOT"
 
 type Builder struct {
 	store        repo.Store
@@ -197,31 +193,6 @@ func isSourceLessOfficialPackage(modPath string) bool {
 	return modPath == "glibc"
 }
 
-func selectedGlibc(targets []*modules.Module) (module.Version, bool) {
-	for _, target := range targets {
-		if target.Path == "glibc" {
-			return module.Version{Path: target.Path, Version: target.Version}, true
-		}
-	}
-	return module.Version{}, false
-}
-
-func defaultSysrootMetadata(targets []*modules.Module, results map[module.Version]classfile.BuildResult) (string, bool) {
-	glibc, ok := selectedGlibc(targets)
-	if !ok {
-		return "", false
-	}
-	result, ok := results[glibc]
-	if !ok {
-		return "", false
-	}
-	metadata := result.Metadata()
-	if metadata == "" {
-		return "", false
-	}
-	return metadata, true
-}
-
 func selectedGlibcVersion(targets []*modules.Module) string {
 	for _, target := range targets {
 		if target.Path == "glibc" {
@@ -229,15 +200,6 @@ func selectedGlibcVersion(targets []*modules.Module) string {
 		}
 	}
 	return ""
-}
-
-func needsDefaultSysroot(matrix string) bool {
-	target, err := buildtarget.Parse(matrix)
-	if err != nil {
-		return false
-	}
-	host := buildtarget.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
-	return target.NeedsDefaultGlibc(host)
 }
 
 func applyCommandPatch(req execbroker.Request, patch crosscompile.Patch) execbroker.Request {
@@ -262,46 +224,6 @@ func applyCommandPatch(req execbroker.Request, patch crosscompile.Patch) execbro
 		}
 		req.Env = env
 	}
-	return req
-}
-
-func sysrootPatch(req execbroker.Request, metadata string) crosscompile.Patch {
-	if metadata == "" {
-		return crosscompile.Patch{}
-	}
-	base := filepath.Base(req.Name)
-	switch base {
-	case "cmake":
-		return flagsEnvPatch(req.Env, metadata, []string{"CFLAGS", "CXXFLAGS", "LDFLAGS"})
-	case "configure":
-		return flagsEnvPatch(req.Env, metadata, []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"})
-	case "cc", "gcc", "clang", "c++", "g++", "clang++":
-		return crosscompile.Patch{AppendArg: strings.Fields(metadata)}
-	}
-	if strings.HasSuffix(base, "configure") {
-		return flagsEnvPatch(req.Env, metadata, []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"})
-	}
-	return crosscompile.Patch{}
-}
-
-func flagsEnvPatch(env []string, metadata string, keys []string) crosscompile.Patch {
-	set := make(map[string]string, len(keys))
-	base := requestEnv(env)
-	for _, key := range keys {
-		set[key] = appendFlagValue(envValue(base, key), metadata)
-	}
-	return crosscompile.Patch{SetEnv: set}
-}
-
-func explicitSysroot(env []string) string {
-	return envValue(env, explicitSysrootEnv)
-}
-
-func stripSysrootSentinel(req execbroker.Request) execbroker.Request {
-	if len(req.Env) == 0 {
-		return req
-	}
-	req.Env = unsetEnv(req.Env, explicitSysrootEnv)
 	return req
 }
 
@@ -333,30 +255,12 @@ func setEnv(env []string, key, value string) []string {
 	return append(env, prefix+value)
 }
 
-func unsetEnv(env []string, key string) []string {
-	prefix := key + "="
-	out := env[:0]
-	for _, item := range env {
-		if !strings.HasPrefix(item, prefix) {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
-func appendFlagValue(current, flag string) string {
-	if current == "" {
-		return flag
-	}
-	return current + " " + flag
-}
-
 func prependPathValue(current, value string) string {
 	if current == "" {
 		return value
 	}
 	sep := ":"
-	if runtime.GOOS == "windows" {
+	if os.PathListSeparator == ';' {
 		sep = ";"
 	}
 	return value + sep + current
@@ -465,24 +369,13 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return Result{}, err
 		}
 
-		defaultSysroot, hasDefaultSysroot := defaultSysrootMetadata(targets, builtResults)
-		if needsDefaultSysroot(b.matrix) && mod.Path != "glibc" && !hasDefaultSysroot {
-			return Result{}, fmt.Errorf("cross-linux matrix %q selected glibc but no default sysroot metadata is available for %s@%s", b.matrix, mod.Path, mod.Version)
-		}
 		restoreMiddleware := execbroker.SetMiddleware(func(req execbroker.Request) execbroker.Request {
-			req = applyCommandPatch(req, cc.Use(crosscompile.Command{
+			return applyCommandPatch(req, cc.Use(crosscompile.Command{
 				Name: req.Name,
 				Args: req.Args,
 				Env:  req.Env,
 				Dir:  req.Dir,
 			}))
-			if sysroot := explicitSysroot(req.Env); sysroot != "" {
-				return stripSysrootSentinel(applyCommandPatch(req, sysrootPatch(req, sysroot)))
-			}
-			if hasDefaultSysroot {
-				return stripSysrootSentinel(applyCommandPatch(req, sysrootPatch(req, defaultSysroot)))
-			}
-			return stripSysrootSentinel(req)
 		})
 		defer restoreMiddleware()
 

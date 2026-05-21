@@ -183,22 +183,25 @@ func TestRunUsesExecBroker(t *testing.T) {
 	}
 }
 
-func TestRunSysrootSuppressesDefaultMiddlewareSysroot(t *testing.T) {
-	restore := execbroker.SetMiddleware(func(req execbroker.Request) execbroker.Request {
-		if got := envValue(req.Env, "LLAR_EXECBROKER_SYSROOT"); got != "--sysroot=/explicit" {
-			t.Fatalf("LLAR_EXECBROKER_SYSROOT = %q, want explicit sysroot", got)
-		}
-		req.Name = "go"
-		req.Args = []string{"version"}
-		req.Env = setEnv(req.Env, "CFLAGS", "--sysroot=/default")
-		return req
-	})
-	defer restore()
+func TestApplySysrootEnvOverridesExistingSysroot(t *testing.T) {
+	env := applySysrootEnv([]string{
+		"CPPFLAGS=-DDEBUG --sysroot=/default",
+		"CFLAGS=-O2 --sysroot=/default",
+		"CXXFLAGS=-isysroot /default-sdk -stdlib=libc++",
+		"LDFLAGS=-Wl,--as-needed --sysroot=/default",
+	}, []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"}, "--sysroot=/explicit")
 
-	a := New("", "", "")
-	a.Sysroot("--sysroot=/explicit")
-	if err := a.run("llar-missing-command", nil); err != nil {
-		t.Fatalf("run: %v", err)
+	if got := envValue(env, "CPPFLAGS"); got != "-DDEBUG --sysroot=/explicit" {
+		t.Fatalf("CPPFLAGS = %q, want explicit sysroot only", got)
+	}
+	if got := envValue(env, "CFLAGS"); got != "-O2 --sysroot=/explicit" {
+		t.Fatalf("CFLAGS = %q, want explicit sysroot only", got)
+	}
+	if got := envValue(env, "CXXFLAGS"); got != "-stdlib=libc++ --sysroot=/explicit" {
+		t.Fatalf("CXXFLAGS = %q, want explicit sysroot only", got)
+	}
+	if got := envValue(env, "LDFLAGS"); got != "-Wl,--as-needed --sysroot=/explicit" {
+		t.Fatalf("LDFLAGS = %q, want explicit sysroot only", got)
 	}
 }
 

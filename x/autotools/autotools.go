@@ -114,16 +114,9 @@ func (a *AutoTools) workDir() string {
 }
 
 func (a *AutoTools) run(name string, args []string) error {
-	env := os.Environ()
+	cmd := execbroker.Command(name, args...)
 	if a.sysroot != "" {
-		env = setEnv(env, "LLAR_EXECBROKER_SYSROOT", a.sysroot)
-	}
-	cmd := execbroker.CommandEnv(env, name, args...)
-	if a.sysroot != "" {
-		cmd.Env = unsetEnv(cmd.Env, "LLAR_EXECBROKER_SYSROOT")
-		for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
-			cmd.Env = setEnv(cmd.Env, key, appendFlagValue(envValue(cmd.Env, key), a.sysroot))
-		}
+		cmd.Env = applySysrootEnv(cmd.Env, []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"}, a.sysroot)
 	}
 	cmd.Dir = a.workDir()
 	cmd.Stdout = os.Stdout
@@ -172,15 +165,15 @@ func setEnv(env []string, key, value string) []string {
 	return append(env, prefix+value)
 }
 
-func unsetEnv(env []string, key string) []string {
-	prefix := key + "="
-	out := env[:0]
-	for _, item := range env {
-		if !strings.HasPrefix(item, prefix) {
-			out = append(out, item)
-		}
+func applySysrootEnv(env []string, keys []string, metadata string) []string {
+	if env == nil {
+		env = os.Environ()
 	}
-	return out
+	env = append([]string(nil), env...)
+	for _, key := range keys {
+		env = setEnv(env, key, appendFlagValue(stripSysrootFlags(envValue(env, key)), metadata))
+	}
+	return env
 }
 
 func appendFlagValue(current, flag string) string {
@@ -188,4 +181,20 @@ func appendFlagValue(current, flag string) string {
 		return flag
 	}
 	return current + " " + flag
+}
+
+func stripSysrootFlags(flags string) string {
+	fields := strings.Fields(flags)
+	out := fields[:0]
+	for i := 0; i < len(fields); i++ {
+		if strings.HasPrefix(fields[i], "--sysroot=") {
+			continue
+		}
+		if fields[i] == "-isysroot" {
+			i++
+			continue
+		}
+		out = append(out, fields[i])
+	}
+	return strings.Join(out, " ")
 }
