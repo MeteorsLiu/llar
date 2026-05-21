@@ -23,6 +23,22 @@ func TestCacheKey(t *testing.T) {
 	}
 }
 
+func TestBuildVariantIncludesGlibcVersion(t *testing.T) {
+	got := buildVariant("amd64-linux", "2.39")
+	want := "amd64-linux+glibc-2.39"
+	if got != want {
+		t.Fatalf("buildVariant = %q, want %q", got, want)
+	}
+}
+
+func TestBuildVariantWithoutGlibcUsesMatrix(t *testing.T) {
+	got := buildVariant("arm64-darwin", "")
+	want := "arm64-darwin"
+	if got != want {
+		t.Fatalf("buildVariant = %q, want %q", got, want)
+	}
+}
+
 func TestBuildCache_GetSet(t *testing.T) {
 	c := &buildCache{}
 

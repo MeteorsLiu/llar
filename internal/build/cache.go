@@ -36,6 +36,13 @@ func cacheKey(version, matrix string) string {
 	return version + "-" + matrix
 }
 
+func buildVariant(matrix, glibcVersion string) string {
+	if glibcVersion == "" {
+		return matrix
+	}
+	return matrix + "+glibc-" + glibcVersion
+}
+
 func (c *buildCache) get(version, matrix string) (*buildEntry, bool) {
 	entry, ok := c.Cache[cacheKey(version, matrix)]
 	return entry, ok
@@ -59,11 +66,15 @@ func (b *Builder) cacheDir(modPath string) (string, error) {
 
 // installDir returns the build output directory: workspaceDir/<escapedPath>@<version>-<matrix>.
 func (b *Builder) installDir(modPath, version string) (string, error) {
+	return b.installDirForVariant(modPath, version, b.matrix)
+}
+
+func (b *Builder) installDirForVariant(modPath, version, variant string) (string, error) {
 	escaped, err := module.EscapePath(modPath)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(b.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, version, b.matrix)), nil
+	return filepath.Join(b.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, version, variant)), nil
 }
 
 // loadCache reads the cache file for a module from the workspace directory.

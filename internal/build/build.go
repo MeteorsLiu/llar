@@ -216,6 +216,15 @@ func defaultSysrootMetadata(targets []*modules.Module, results map[module.Versio
 	return metadata, true
 }
 
+func selectedGlibcVersion(targets []*modules.Module) string {
+	for _, target := range targets {
+		if target.Path == "glibc" {
+			return target.Version
+		}
+	}
+	return ""
+}
+
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
 
@@ -233,6 +242,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	if len(targets) > 0 {
 		rootID = module.Version{Path: targets[0].Path, Version: targets[0].Version}
 	}
+	variant := buildVariant(b.matrix, selectedGlibcVersion(targets))
 
 	build := func(mod *modules.Module) (Result, error) {
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
@@ -253,7 +263,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		var cachedEntry *buildEntry
 		if cache != nil {
-			if entry, ok := cache.get(mod.Version, b.matrix); ok {
+			if entry, ok := cache.get(mod.Version, variant); ok {
 				cachedEntry = entry
 			}
 		}
@@ -261,7 +271,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// Fast path: cache hit and no OnTest to run. Skip source clone
 		// and OnBuild entirely.
 		if cachedEntry != nil && !testThisMod {
-			dir, _ := b.installDir(mod.Path, mod.Version)
+			dir, _ := b.installDirForVariant(mod.Path, mod.Version, variant)
 			return Result{Metadata: cachedEntry.Metadata, OutputDir: dir}, nil
 		}
 
@@ -289,7 +299,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			}
 		}
 
-		installDir, err := b.installDir(mod.Path, mod.Version)
+		installDir, err := b.installDirForVariant(mod.Path, mod.Version, variant)
 		if err != nil {
 			return Result{}, err
 		}
@@ -298,7 +308,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 
 		getOutputDir := func(_ string, m module.Version) (string, error) {
-			return b.installDir(m.Path, m.Version)
+			return b.installDirForVariant(m.Path, m.Version, variant)
 		}
 		buildContext := classfile.NewContext(tmpSourceDir, installDir, b.matrix, getOutputDir)
 
@@ -344,7 +354,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			if cache == nil {
 				cache = &buildCache{}
 			}
-			cache.set(mod.Version, b.matrix, &buildEntry{
+			cache.set(mod.Version, variant, &buildEntry{
 				Metadata:  metadata,
 				BuildTime: time.Now(),
 			})
