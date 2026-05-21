@@ -191,6 +191,31 @@ func isSourceLessOfficialPackage(modPath string) bool {
 	return modPath == "glibc"
 }
 
+func selectedGlibc(targets []*modules.Module) (module.Version, bool) {
+	for _, target := range targets {
+		if target.Path == "glibc" {
+			return module.Version{Path: target.Path, Version: target.Version}, true
+		}
+	}
+	return module.Version{}, false
+}
+
+func defaultSysrootMetadata(targets []*modules.Module, results map[module.Version]classfile.BuildResult) (string, bool) {
+	glibc, ok := selectedGlibc(targets)
+	if !ok {
+		return "", false
+	}
+	result, ok := results[glibc]
+	if !ok {
+		return "", false
+	}
+	metadata := result.Metadata()
+	if metadata == "" {
+		return "", false
+	}
+	return metadata, true
+}
+
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
 

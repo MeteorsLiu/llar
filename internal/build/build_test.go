@@ -578,6 +578,44 @@ func TestBuild_SourceLessGlibcDoesNotCloneGithubGlibc(t *testing.T) {
 	}
 }
 
+func TestDefaultSysrootMetadataReturnsSelectedGlibcMetadata(t *testing.T) {
+	var glibcResult classfile.BuildResult
+	glibcResult.SetMetadata("--sysroot=/fake/glibc")
+
+	targets := []*modules.Module{
+		{Path: "test/app", Version: "1.0.0"},
+		{Path: "glibc", Version: "2.39"},
+	}
+	results := map[module.Version]classfile.BuildResult{
+		{Path: "glibc", Version: "2.39"}: glibcResult,
+	}
+
+	got, ok := defaultSysrootMetadata(targets, results)
+	if !ok {
+		t.Fatal("defaultSysrootMetadata ok = false, want true")
+	}
+	if got != "--sysroot=/fake/glibc" {
+		t.Fatalf("metadata = %q, want --sysroot=/fake/glibc", got)
+	}
+}
+
+func TestDefaultSysrootMetadataSkipsMissingOrEmptyGlibc(t *testing.T) {
+	targets := []*modules.Module{
+		{Path: "test/app", Version: "1.0.0"},
+		{Path: "glibc", Version: "2.39"},
+	}
+	if got, ok := defaultSysrootMetadata(targets, nil); ok || got != "" {
+		t.Fatalf("missing result: metadata=%q ok=%v, want empty false", got, ok)
+	}
+
+	results := map[module.Version]classfile.BuildResult{
+		{Path: "glibc", Version: "2.39"}: {},
+	}
+	if got, ok := defaultSysrootMetadata(targets, results); ok || got != "" {
+		t.Fatalf("empty result: metadata=%q ok=%v, want empty false", got, ok)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // OnTest (RunTest) behaviour tests
 // ---------------------------------------------------------------------------
