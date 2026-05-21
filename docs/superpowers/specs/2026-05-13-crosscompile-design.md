@@ -100,7 +100,7 @@ amd64-linux -> x86_64-linux-gnu
 
 This rule applies only to cross-Linux targets. Native Linux builds use the system libc. Darwin/macOS targets, embedded targets, and targets without an `os` field do not receive a hidden `glibc` dependency.
 
-Implementation must account for the current module path rules if they require namespaced paths. The design requirement is that the official default sysroot package is addressed as `glibc`.
+Implementation must account for the current source repository rules if they require namespaced paths. The design requirement is that the official default sysroot package is addressed as `glibc`, while its default source repository resolves to `github.com/goplus/glibc`. In MVP/testing, this repository can be temporarily substituted by the configured source repository provider, but formulas and dependency resolution still see the package as `glibc`.
 
 Dependency rules:
 

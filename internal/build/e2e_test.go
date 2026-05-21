@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goplus/llar/internal/build/buildtarget"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
@@ -105,6 +106,27 @@ func TestE2E_DiamondDeps(t *testing.T) {
 	}
 }
 
+// TestE2E_ShortOfficialModuleUsesDefaultSourceRepo verifies the real
+// formula-load/build path for single-segment official modules. The module is
+// named "glibc", while the source fixture is hosted under goplus/glibc.
+func TestE2E_ShortOfficialModuleUsesDefaultSourceRepo(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+
+	main := module.Version{Path: "glibc", Version: "2.39"}
+	results, _ := loadAndBuild(t, b, store, main)
+
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if !strings.HasPrefix(results[0].Metadata, "--sysroot=") {
+		t.Fatalf("metadata = %q, want sysroot metadata from goplus/glibc source fixture", results[0].Metadata)
+	}
+	if results[0].OutputDir == "" || !strings.HasSuffix(results[0].Metadata, results[0].OutputDir) {
+		t.Fatalf("metadata = %q, want it to include output dir %q", results[0].Metadata, results[0].OutputDir)
+	}
+}
+
 // TestE2E_MatrixVariation verifies that building the same module with
 // different matrix strings produces separate cached results and install dirs.
 func TestE2E_MatrixVariation(t *testing.T) {
@@ -129,7 +151,8 @@ func TestE2E_MatrixVariation(t *testing.T) {
 	// Verify each matrix has its own install directory
 	for _, matrix := range matrices {
 		b := &Builder{workspaceDir: wsDir, matrix: matrix}
-		dir, _ := b.installDir("test/ctxcheck", "1.0.0")
+		variant := testBuildVariant(t, b)
+		dir, _ := b.installDirForVariant("test/ctxcheck", "1.0.0", variant)
 		if _, err := os.Stat(dir); err != nil {
 			t.Errorf("installDir not created for matrix %q: %v", matrix, err)
 		}
@@ -358,6 +381,88 @@ func TestE2E_RealZlibBuild(t *testing.T) {
 	}
 }
 
+// TestE2E_RealZlibCrossLinuxAMD64Build exercises a real cross-toolchain build:
+// host platform -> linux/amd64 target by default, real zlib source, real CMake
+// configure, and LLAR's managed cross compiler injection.
+//
+// This test is opt-in because it depends on network access, the managed
+// toolchain manifest/cache, and a usable Linux sysroot/toolchain combination.
+// Run it explicitly with:
+//
+//	LLAR_RUN_CROSS_E2E=1 go test -ldflags="-checklinkname=0" ./internal/build -run TestE2E_RealZlibCrossLinuxAMD64Build -count=1 -v
+func TestE2E_RealZlibCrossLinuxAMD64Build(t *testing.T) {
+	if os.Getenv("LLAR_RUN_CROSS_E2E") != "1" {
+		t.Skip("set LLAR_RUN_CROSS_E2E=1 to run real cross-toolchain e2e")
+	}
+	if testing.Short() {
+		t.Skip("skipping real cross build test in short mode")
+	}
+	for _, tool := range []string{"cmake", "git"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found, skipping real cross build test", tool)
+		}
+	}
+	matrix := os.Getenv("LLAR_CROSS_E2E_MATRIX")
+	if matrix == "" {
+		matrix = "amd64-linux"
+	}
+	target, err := buildtarget.Parse(matrix)
+	if err != nil {
+		t.Fatalf("invalid LLAR_CROSS_E2E_MATRIX %q: %v", matrix, err)
+	}
+	if target.IsNative(buildtarget.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}) {
+		t.Skipf("host is already %s/%s; this test requires a cross build", target.OS, target.Arch)
+	}
+
+	store := setupTestStore(t)
+	b := &Builder{
+		store:        store,
+		matrix:       matrix,
+		workspaceDir: t.TempDir(),
+		newRepo: func(repoPath string) (vcs.Repo, error) {
+			if repoPath == "github.com/goplus/glibc" {
+				return newMockRepo(filepath.Join(testSourceDir, "goplus", "glibc")), nil
+			}
+			return vcs.NewRepo(repoPath)
+		},
+	}
+
+	main := module.Version{Path: "madler/zlib", Version: "v1.3.1"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store, MatrixStr: matrix})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+	if findModule(mods, "glibc") == nil {
+		t.Fatalf("cross-linux build list did not include default glibc: %#v", mods)
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("cross Build() failed: %v", err)
+	}
+
+	zlibR, ok := findResult(results, b, mods, "madler/zlib")
+	if !ok {
+		t.Fatalf("missing result for madler/zlib; results=%#v", results)
+	}
+	if zlibR.Metadata != "-lz" {
+		t.Errorf("zlib metadata = %q, want %q", zlibR.Metadata, "-lz")
+	}
+
+	libDir := filepath.Join(zlibR.OutputDir, "lib")
+	entries, err := os.ReadDir(libDir)
+	if err != nil {
+		t.Fatalf("lib dir not found at %s: %v", libDir, err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "libz") {
+			return
+		}
+	}
+	t.Fatalf("no libz* found in %s", libDir)
+}
+
 // TestE2E_RealLibpngBuild builds libpng with its zlib dependency using cmake.use.
 // Verifies: formula dep resolution → zlib built first → cmake.use injects zlib →
 // libpng configure/build/install succeeds → artifacts exist.
@@ -575,7 +680,7 @@ func TestE2E_OnTest_RealCMakeBuild(t *testing.T) {
 	}
 
 	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
+	b := setupBuilder(t, store, runtime.GOARCH+"-"+runtime.GOOS)
 	b.runTest = true
 
 	main := module.Version{Path: "test/cmaketest", Version: "1.0.0"}
@@ -648,7 +753,7 @@ func TestE2E_OnTest_RealCMakeBuild_ReusesCacheOnTestRerun(t *testing.T) {
 	main := module.Version{Path: "test/cmaketest", Version: "1.0.0"}
 
 	// Phase 1: populate cache with a plain (non-test) build.
-	b1 := setupBuilder(t, store, "amd64-linux")
+	b1 := setupBuilder(t, store, runtime.GOARCH+"-"+runtime.GOOS)
 	b1.workspaceDir = wsDir
 	results1, _ := loadAndBuild(t, b1, store, main)
 	if results1[0].Metadata != "-lcmtadd" {
@@ -671,7 +776,7 @@ func TestE2E_OnTest_RealCMakeBuild_ReusesCacheOnTestRerun(t *testing.T) {
 	// Phase 2: same workspace, runTest=true. Expected behaviour (per the
 	// refactor): cache hit so onBuild is skipped, but onTest still runs
 	// against the cached artifacts and writes the stamp.
-	b2 := setupBuilder(t, store, "amd64-linux")
+	b2 := setupBuilder(t, store, runtime.GOARCH+"-"+runtime.GOOS)
 	b2.workspaceDir = wsDir
 	b2.runTest = true
 	results2, _ := loadAndBuild(t, b2, store, main)

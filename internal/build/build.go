@@ -189,8 +189,11 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 	return order
 }
 
-func isSourceLessOfficialPackage(modPath string) bool {
-	return modPath == "glibc"
+func sourceRepoPath(modPath string) string {
+	if strings.Contains(modPath, "/") {
+		return fmt.Sprintf("github.com/%s", modPath)
+	}
+	return fmt.Sprintf("github.com/goplus/%s", modPath)
 }
 
 func applyCommandPatch(req execbroker.Request, patch crosscompile.Patch) execbroker.Request {
@@ -322,17 +325,15 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer os.RemoveAll(tmpSourceDir)
 
-		if !isSourceLessOfficialPackage(mod.Path) {
-			// Before we start to build, clone source to tmpSourceDir
-			// And switch current dir to it.
-			// TODO(MeteorsLiu): Support different code host
-			repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
-			if err != nil {
-				return Result{}, err
-			}
-			if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
-				return Result{}, err
-			}
+		// Before we start to build, clone source to tmpSourceDir
+		// And switch current dir to it.
+		// TODO(MeteorsLiu): Support different code host
+		repo, err := b.newRepo(sourceRepoPath(mod.Path))
+		if err != nil {
+			return Result{}, err
+		}
+		if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
+			return Result{}, err
 		}
 
 		installDir, err := b.installDirForVariant(mod.Path, mod.Version, variant)

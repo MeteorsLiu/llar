@@ -13,6 +13,7 @@ import (
 	"time"
 
 	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/build/crosscompile"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -327,6 +328,15 @@ func loadAndBuild(t *testing.T, b *Builder, store repo.Store, main module.Versio
 	return results, mods
 }
 
+func testBuildVariant(t *testing.T, b *Builder) string {
+	t.Helper()
+	cc, err := crosscompile.New(b.matrix)
+	if err != nil {
+		t.Fatalf("crosscompile.New(%q): %v", b.matrix, err)
+	}
+	return buildVariant(b.matrix, cc.Identity())
+}
+
 // findResult returns the Result for a given module path.
 // Results are in constructBuildList order, so we match via build order.
 func findResult(results []Result, b *Builder, mods []*modules.Module, path string) (Result, bool) {
@@ -337,6 +347,15 @@ func findResult(results []Result, b *Builder, mods []*modules.Module, path strin
 		}
 	}
 	return Result{}, false
+}
+
+func findModule(mods []*modules.Module, path string) *modules.Module {
+	for _, mod := range mods {
+		if mod.Path == path {
+			return mod
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -461,10 +480,11 @@ func TestBuild_SyncError(t *testing.T) {
 func TestBuild_PrePopulatedCache(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
+	variant := testBuildVariant(t, b)
 
 	// Pre-populate cache with a different metadata value
 	cache := &buildCache{}
-	cache.set("1.0.0", "amd64-linux", &buildEntry{
+	cache.set("1.0.0", variant, &buildEntry{
 		Metadata:  "-lPRECACHED",
 		BuildTime: time.Now(),
 	})
@@ -484,6 +504,7 @@ func TestBuild_PrePopulatedCache(t *testing.T) {
 func TestBuild_CacheWrittenCorrectly(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
+	variant := testBuildVariant(t, b)
 
 	main := module.Version{Path: "test/liba", Version: "1.0.0"}
 	loadAndBuild(t, b, store, main)
@@ -493,9 +514,9 @@ func TestBuild_CacheWrittenCorrectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCache() failed: %v", err)
 	}
-	entry, ok := cache.get("1.0.0", "amd64-linux")
+	entry, ok := cache.get("1.0.0", variant)
 	if !ok {
-		t.Fatal("cache entry not found for 1.0.0-amd64-linux")
+		t.Fatalf("cache entry not found for 1.0.0-%s", variant)
 	}
 	if entry.Metadata != "-lA" {
 		t.Errorf("cached metadata = %q, want %q", entry.Metadata, "-lA")
@@ -519,13 +540,14 @@ func TestBuild_CacheWrittenCorrectly(t *testing.T) {
 func TestBuild_CacheAccumulatesMultipleVersions(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
+	variant := testBuildVariant(t, b)
 
 	main := module.Version{Path: "test/liba", Version: "1.0.0"}
 	loadAndBuild(t, b, store, main)
 
 	// Manually add another version to the cache
 	cache, _ := b.loadCache("test/liba")
-	cache.set("2.0.0", "amd64-linux", &buildEntry{
+	cache.set("2.0.0", variant, &buildEntry{
 		Metadata:  "-lA2",
 		BuildTime: time.Now(),
 	})
@@ -539,21 +561,23 @@ func TestBuild_CacheAccumulatesMultipleVersions(t *testing.T) {
 
 	// Verify both entries exist
 	cache, _ = b.loadCache("test/liba")
-	if _, ok := cache.get("1.0.0", "amd64-linux"); !ok {
+	if _, ok := cache.get("1.0.0", variant); !ok {
 		t.Error("cache miss for 1.0.0")
 	}
-	if _, ok := cache.get("2.0.0", "amd64-linux"); !ok {
+	if _, ok := cache.get("2.0.0", variant); !ok {
 		t.Error("cache miss for 2.0.0")
 	}
 }
 
-func TestBuild_SourceLessGlibcDoesNotCloneGithubGlibc(t *testing.T) {
+func TestBuild_ShortOfficialModuleClonesDefaultSourceRepo(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
+	var clonedRepo string
 	b.newRepo = func(repoPath string) (vcs.Repo, error) {
 		if repoPath == "github.com/glibc" {
-			return nil, fmt.Errorf("unexpected source clone for %s", repoPath)
+			return nil, fmt.Errorf("short module path was not expanded: %s", repoPath)
 		}
+		clonedRepo = repoPath
 		modPath := strings.TrimPrefix(repoPath, "github.com/")
 		return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
 	}
@@ -575,6 +599,9 @@ func TestBuild_SourceLessGlibcDoesNotCloneGithubGlibc(t *testing.T) {
 	}
 	if !strings.HasPrefix(results[0].Metadata, "--sysroot=") {
 		t.Fatalf("metadata = %q, want sysroot metadata", results[0].Metadata)
+	}
+	if clonedRepo != "github.com/goplus/glibc" {
+		t.Fatalf("cloned repo = %q, want github.com/goplus/glibc", clonedRepo)
 	}
 }
 
@@ -655,12 +682,13 @@ func TestBuild_RunTest_ReusesCacheWhenHit(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
 	b.runTest = true
+	variant := testBuildVariant(t, b)
 
 	// Pre-populate cache with a sentinel metadata value. If the cache is
 	// consulted and reused (as the new behavior requires), Build() will
 	// return this value without re-running OnBuild.
 	cache := &buildCache{}
-	cache.set("1.0.0", "amd64-linux", &buildEntry{
+	cache.set("1.0.0", variant, &buildEntry{
 		Metadata:  "-lCACHED",
 		BuildTime: time.Now(),
 	})
@@ -702,7 +730,7 @@ func TestBuild_RunTest_ReusesCacheWhenHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCache() failed: %v", err)
 	}
-	entry, ok := cacheAfter.get("1.0.0", "amd64-linux")
+	entry, ok := cacheAfter.get("1.0.0", variant)
 	if !ok {
 		t.Fatal("cache entry removed; expected pre-populated entry to remain")
 	}
@@ -718,6 +746,7 @@ func TestBuild_RunTest_SavesCacheOnMiss(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
 	b.runTest = true
+	variant := testBuildVariant(t, b)
 
 	// No pre-populated cache: this is a cache miss.
 
@@ -754,7 +783,7 @@ func TestBuild_RunTest_SavesCacheOnMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadCache() failed: %v", err)
 	}
-	entry, ok := cacheAfter.get("1.0.0", "amd64-linux")
+	entry, ok := cacheAfter.get("1.0.0", variant)
 	if !ok {
 		t.Fatal("cache entry missing; expected cache write after cache-miss test run")
 	}
@@ -816,11 +845,12 @@ func TestBuild_RunTest_DepCacheStillUsed(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
 	b.runTest = true
+	variant := testBuildVariant(t, b)
 
 	// Pre-populate liba's cache with a sentinel metadata; if liba is rebuilt
 	// it would produce "-lA" instead, so the sentinel is a unique cache signal.
 	cache := &buildCache{}
-	cache.set("1.0.0", "amd64-linux", &buildEntry{
+	cache.set("1.0.0", variant, &buildEntry{
 		Metadata:  "-lA-CACHED",
 		BuildTime: time.Now(),
 	})
@@ -898,14 +928,15 @@ func TestBuild_InstallDirConvention(t *testing.T) {
 	main := module.Version{Path: "test/liba", Version: "1.0.0"}
 	loadAndBuild(t, b, store, main)
 
-	installDir, _ := b.installDir("test/liba", "1.0.0")
+	variant := testBuildVariant(t, b)
+	installDir, _ := b.installDirForVariant("test/liba", "1.0.0", variant)
 
 	// Verify the path follows workspace/<escaped>@<version>-<matrix>
 	rel, err := filepath.Rel(b.workspaceDir, installDir)
 	if err != nil {
 		t.Fatalf("installDir not under workspace: %v", err)
 	}
-	want := filepath.Join("test", "liba@1.0.0-amd64-linux")
+	want := filepath.Join("test", "liba@1.0.0-"+variant)
 	if rel != want {
 		t.Errorf("installDir rel = %q, want %q", rel, want)
 	}

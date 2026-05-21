@@ -1,12 +1,19 @@
+import "os"
+
 id "glibc"
 
 fromVer "2.39"
 
 onBuild (ctx, proj, out) => {
+	data, err := os.readFile(ctx.SourceDir + "/sysroot.flag")
+	if err != nil {
+		out.addErr err
+		return
+	}
 	dir, err := ctx.outputDir()
 	if err != nil {
 		out.addErr err
 		return
 	}
-	out.setMetadata "--sysroot=" + dir
+	out.setMetadata string(data) + dir
 }

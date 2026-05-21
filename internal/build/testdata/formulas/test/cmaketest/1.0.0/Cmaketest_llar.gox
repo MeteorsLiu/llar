@@ -41,11 +41,18 @@ onTest (ctx, proj, out) => {
 		return
 	}
 
-	// Build the test program in its own tree so onTest works identically
-	// on cache hit (where onBuild was skipped and no _build dir exists)
-	// and on cache miss (where onBuild just populated _build).
+	// Build the test program in a fresh transient directory, decoupled
+	// from ctx.SourceDir. Today SourceDir is os.MkdirTemp'd per Build,
+	// so a nested testBuild would also be fresh; once source caching
+	// lands SourceDir will be stable across runs and a fixed nested path
+	// would inherit a stale CMakeCache.txt from a prior matrix/install.
+	// Using os.mkdirTemp keeps onTest correct under both regimes.
 	testSrc := ctx.SourceDir + "/tests"
-	testBuild := ctx.SourceDir + "/_testbuild"
+	testBuild, err := os.mkdirTemp("", "cmtadd-testbuild-*")
+	if err != nil {
+		out.addErr err
+		return
+	}
 
 	tc := cmake.new(testSrc, testBuild, testBuild+"/_out")
 	tc.buildType "Release"

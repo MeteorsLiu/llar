@@ -1,713 +1,205 @@
-# Cross Compile Command Injection Implementation Plan
+# Cross Compile Foundation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add hidden cross compilation command patching through `internal/build/crosscompile`, wired into the existing `execbroker` middleware during builds.
+**Goal:** Build the dependency graph and build-context foundation for hidden cross-Linux sysroot selection, so later command injection can consume a selected `glibc` sysroot without formula changes.
 
-**Architecture:** `internal/build/crosscompile` owns matrix parsing, cross-platform detection, target GNU tool lookup, and neutral command patches. `internal/build` owns middleware lifecycle and converts neutral patches into `execbroker.Request`. Formula APIs remain unchanged.
+**Architecture:** Matrix parsing lives in a small internal package shared by module loading and build. `modules.Load` injects hidden cross-Linux `glibc` before MVS so normal version selection remains the source of truth. `internal/build` treats `glibc` as an official source-less package and exposes its `BuildResult.Metadata` as default sysroot metadata for downstream builds.
 
-**Tech Stack:** Go, existing `internal/build`, existing `internal/execbroker`, standard library `os/exec`, `runtime`, `path/filepath`, `strings`, `testing`.
+**Tech Stack:** Go, existing `internal/modules`, existing `internal/build`, existing `formula.BuildResult.Metadata`, standard library `runtime`, `strings`, `testing`, `os`.
 
 ---
 
+## Ground Rules
+
+- Before creating or editing any LLAR formula `.gox` file, read the local `write-formula` skill and follow it. Do not guess formula syntax, helper names, generated method names, or DSL conventions.
+- Repository-specific claims must be verified from source files or tests before being written into code.
+- Keep formula changes limited to fixtures needed by this plan.
+
+## Scope
+
+This plan implements the foundation only:
+
+- matrix target parsing;
+- hidden cross-Linux `glibc` injection before MVS;
+- official source-less `glibc` build path;
+- selected `glibc` metadata propagation inside build context;
+- build cache variant including selected `glibc` version.
+
+This plan does not implement LLVM download, command rewriting, CMake toolchain files, Autotools flags, or `CMake.Sysroot` / `AutoTools.Sysroot`. Those belong in the next plan after this foundation is merged.
+
 ## File Structure
 
-- Create `internal/build/crosscompile/crosscompile.go`
-  - Public API: `Command`, `Patch`, `CrossCompile`, `New`, `Use`.
-  - Private options/test seam: `newWithOptions`.
-  - Platform parsing and native/cross enablement.
+- Create `internal/build/buildtarget/target.go`
+  - Parses LLAR matrix strings into `arch` plus optional `os`.
+  - Decides native vs cross against a supplied host.
+  - Decides whether a target needs the default cross-Linux `glibc`.
 
-- Create `internal/build/crosscompile/tools.go`
-  - Platform-to-GNU-triple mapping.
-  - Target tool lookup.
-  - CMake toolchain file generation in LLAR cache.
+- Create `internal/build/buildtarget/target_test.go`
+  - Covers native, cross Linux, Darwin, no-os, and malformed matrix cases.
 
-- Create `internal/build/crosscompile/rules.go`
-  - Command classification and patch generation for CMake configure, Autotools configure, pkg-config, and compiler/binutils commands.
+- Modify `internal/modules/load.go`
+  - Adds matrix-aware options.
+  - Injects hidden `glibc@2.39` into main requirements before MVS for cross-Linux only.
 
-- Create `internal/build/crosscompile/crosscompile_test.go`
-  - Unit tests for native passthrough, matrix parsing, unsupported targets, tool lookup, CMake patches, configure patches, pkg-config patches, and direct compiler/binutils rewrites.
+- Modify `internal/modules/load_test.go`
+  - Adds tests for hidden default `glibc` injection, non-Linux/no-os skips, and explicit `glibc` version selection.
+
+- Add `internal/modules/testdata/load/glibc/...`
+  - Minimal single-segment official package fixture.
 
 - Modify `internal/build/build.go`
-  - Import `internal/build/crosscompile` and `internal/execbroker`.
-  - Create the crosscompile context once at the start of `Build`.
-  - Install/restore middleware around formula execution.
-  - Add a private `applyCrossCompilePatch` helper.
+  - Adds official source-less source checkout policy for `glibc`.
+  - Captures selected `glibc` metadata and applies it to downstream build contexts.
+  - Uses build variant for cache/install paths.
+
+- Modify `internal/build/cache.go`
+  - Changes internal cache key/install dir to accept a variant string.
 
 - Modify `internal/build/build_test.go`
-  - Add tests for `applyCrossCompilePatch`.
-  - Add a build-level test proving the middleware is installed during formula execution and restored after build.
+  - Adds tests for source-less `glibc`, sysroot metadata propagation, and cache variant.
 
-## Task 1: Add CrossCompile API and Native No-Op
+- Add `internal/build/testdata/formulas/glibc/...`
+  - Minimal build fixture that emits fake sysroot metadata.
 
-**Files:**
-- Create: `internal/build/crosscompile/crosscompile.go`
-- Create: `internal/build/crosscompile/crosscompile_test.go`
-
-- [ ] **Step 1: Write failing tests for native passthrough and invalid matrix**
-
-Add `internal/build/crosscompile/crosscompile_test.go`:
-
-```go
-package crosscompile
-
-import (
-	"runtime"
-	"testing"
-)
-
-func TestNewNativeUseReturnsZeroPatch(t *testing.T) {
-	matrix := runtime.GOARCH + "-" + runtime.GOOS
-
-	cc, err := New(matrix)
-	if err != nil {
-		t.Fatalf("New(%q): %v", matrix, err)
-	}
-
-	patch := cc.Use(Command{Name: "cc", Args: []string{"-c", "hello.c"}})
-	if patch.Name != "" {
-		t.Fatalf("patch.Name = %q, want empty", patch.Name)
-	}
-	if len(patch.PrependArg) != 0 || len(patch.AppendArg) != 0 {
-		t.Fatalf("patch args = %#v/%#v, want empty", patch.PrependArg, patch.AppendArg)
-	}
-	if len(patch.SetEnv) != 0 || len(patch.PrependEnv) != 0 {
-		t.Fatalf("patch env = %#v/%#v, want empty", patch.SetEnv, patch.PrependEnv)
-	}
-}
-
-func TestNewRejectsInvalidMatrix(t *testing.T) {
-	_, err := New("linux")
-	if err == nil {
-		t.Fatal("New(invalid matrix) error = nil, want error")
-	}
-}
-
-func TestParseMatrix(t *testing.T) {
-	got, err := parseMatrix("arm64-linux")
-	if err != nil {
-		t.Fatalf("parseMatrix: %v", err)
-	}
-	if got.Arch != "arm64" || got.OS != "linux" {
-		t.Fatalf("platform = %+v, want arch=arm64 os=linux", got)
-	}
-}
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run:
-
-```bash
-go test ./internal/build/crosscompile
-```
-
-Expected: FAIL because package `internal/build/crosscompile` does not exist yet.
-
-- [ ] **Step 3: Add minimal API and native behavior**
-
-Create `internal/build/crosscompile/crosscompile.go`:
-
-```go
-package crosscompile
-
-import (
-	"fmt"
-	"runtime"
-	"strings"
-)
-
-type Command struct {
-	Name string
-	Args []string
-	Env  []string
-	Dir  string
-}
-
-type Patch struct {
-	Name       string
-	PrependArg []string
-	AppendArg  []string
-	SetEnv     map[string]string
-	PrependEnv map[string][]string
-}
-
-type CrossCompile struct {
-	enabled bool
-	build   platform
-	target  platform
-	tools   targetTools
-}
-
-type platform struct {
-	OS   string
-	Arch string
-}
-
-type options struct {
-	build   platform
-	lookPath func(string) (string, error)
-	cacheDir string
-}
-
-func New(matrix string) (*CrossCompile, error) {
-	return newWithOptions(matrix, options{
-		build: platform{OS: runtime.GOOS, Arch: runtime.GOARCH},
-	})
-}
-
-func newWithOptions(matrix string, opts options) (*CrossCompile, error) {
-	target, err := parseMatrix(matrix)
-	if err != nil {
-		return nil, err
-	}
-	cc := &CrossCompile{
-		enabled: target != opts.build,
-		build:   opts.build,
-		target:  target,
-	}
-	return cc, nil
-}
-
-func (c *CrossCompile) Use(cmd Command) Patch {
-	return Patch{}
-}
-
-func parseMatrix(matrix string) (platform, error) {
-	arch, osName, ok := strings.Cut(matrix, "-")
-	if !ok || arch == "" || osName == "" || strings.Contains(osName, "-") {
-		return platform{}, fmt.Errorf("invalid cross compile matrix %q, want <arch>-<os>", matrix)
-	}
-	return platform{OS: osName, Arch: arch}, nil
-}
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run:
-
-```bash
-go test ./internal/build/crosscompile
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add internal/build/crosscompile/crosscompile.go internal/build/crosscompile/crosscompile_test.go
-git commit -m "feat(build): add crosscompile api skeleton"
-```
-
-## Task 2: Add Target Tool Discovery and CMake Toolchain File
+## Task 1: Add Matrix Target Parser
 
 **Files:**
-- Modify: `internal/build/crosscompile/crosscompile.go`
-- Create: `internal/build/crosscompile/tools.go`
-- Modify: `internal/build/crosscompile/crosscompile_test.go`
+- Create: `internal/build/buildtarget/target_test.go`
+- Create: `internal/build/buildtarget/target.go`
 
-- [ ] **Step 1: Add failing tests for GNU target lookup and unsupported targets**
+- [ ] **Step 1: Write the failing tests**
 
-Append to `internal/build/crosscompile/crosscompile_test.go`:
-
-```go
-func TestNewCrossFindsGNUTargetTools(t *testing.T) {
-	cacheDir := t.TempDir()
-	looked := map[string]bool{}
-	fakeLookPath := func(name string) (string, error) {
-		looked[name] = true
-		return "/fake/bin/" + name, nil
-	}
-
-	cc, err := newWithOptions("arm64-linux", options{
-		build:    platform{OS: "darwin", Arch: "arm64"},
-		lookPath: fakeLookPath,
-		cacheDir: cacheDir,
-	})
-	if err != nil {
-		t.Fatalf("newWithOptions: %v", err)
-	}
-	if !cc.enabled {
-		t.Fatal("enabled = false, want true")
-	}
-	if cc.tools.hostTriple != "aarch64-linux-gnu" {
-		t.Fatalf("hostTriple = %q, want aarch64-linux-gnu", cc.tools.hostTriple)
-	}
-	if cc.tools.cc != "/fake/bin/aarch64-linux-gnu-gcc" {
-		t.Fatalf("cc = %q", cc.tools.cc)
-	}
-	for _, name := range []string{
-		"aarch64-linux-gnu-gcc",
-		"aarch64-linux-gnu-g++",
-		"aarch64-linux-gnu-ar",
-		"aarch64-linux-gnu-ranlib",
-		"aarch64-linux-gnu-strip",
-	} {
-		if !looked[name] {
-			t.Fatalf("lookPath did not check %s", name)
-		}
-	}
-	if cc.tools.cmakeToolchainFile == "" {
-		t.Fatal("cmakeToolchainFile is empty")
-	}
-}
-
-func TestNewCrossRejectsUnsupportedTarget(t *testing.T) {
-	_, err := newWithOptions("arm64-windows", options{
-		build: platform{OS: "darwin", Arch: "arm64"},
-		lookPath: func(name string) (string, error) {
-			return "/fake/bin/" + name, nil
-		},
-		cacheDir: t.TempDir(),
-	})
-	if err == nil {
-		t.Fatal("newWithOptions unsupported target error = nil, want error")
-	}
-}
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run:
-
-```bash
-go test ./internal/build/crosscompile
-```
-
-Expected: FAIL because `targetTools`, triple mapping, tool lookup, and CMake file generation are not implemented.
-
-- [ ] **Step 3: Implement target tool discovery**
-
-Create `internal/build/crosscompile/tools.go`:
+Create `internal/build/buildtarget/target_test.go`:
 
 ```go
-package crosscompile
+package buildtarget
 
-import (
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-)
+import "testing"
 
-type targetTools struct {
-	buildTriple string
-	hostTriple  string
-
-	cc     string
-	cxx    string
-	ar     string
-	ranlib string
-	strip  string
-
-	pkgConfig string
-	sysroot   string
-
-	cmakeToolchainFile string
+func TestParseLinuxTarget(t *testing.T) {
+	target, err := Parse("arm64-linux")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if target.Arch != "arm64" || target.OS != "linux" {
+		t.Fatalf("target = %+v, want arch=arm64 os=linux", target)
+	}
 }
 
-func prepareTargetTools(target platform, opts options) (targetTools, error) {
-	hostTriple, err := gnuTriple(target)
+func TestParseNoOSTarget(t *testing.T) {
+	target, err := Parse("arm64")
 	if err != nil {
-		return targetTools{}, err
+		t.Fatalf("Parse: %v", err)
 	}
-	buildTriple, err := gnuTriple(opts.build)
-	if err != nil {
-		buildTriple = opts.build.Arch + "-" + opts.build.OS
+	if target.Arch != "arm64" || target.OS != "" {
+		t.Fatalf("target = %+v, want arch=arm64 no os", target)
 	}
+}
 
-	lookPath := opts.lookPath
-	if lookPath == nil {
-		lookPath = exec.LookPath
-	}
-
-	lookupRequired := func(suffix string) (string, error) {
-		name := hostTriple + "-" + suffix
-		path, err := lookPath(name)
-		if err != nil {
-			return "", fmt.Errorf("cross compile tool %s not found: %w", name, err)
+func TestParseRejectsMalformedMatrix(t *testing.T) {
+	for _, matrix := range []string{"", "-linux", "arm64-", "arm64-linux-debug"} {
+		if _, err := Parse(matrix); err == nil {
+			t.Fatalf("Parse(%q) error = nil, want error", matrix)
 		}
-		return path, nil
-	}
-
-	tools := targetTools{
-		buildTriple: buildTriple,
-		hostTriple:  hostTriple,
-	}
-	if tools.cc, err = lookupRequired("gcc"); err != nil {
-		return targetTools{}, err
-	}
-	if tools.cxx, err = lookupRequired("g++"); err != nil {
-		return targetTools{}, err
-	}
-	if tools.ar, err = lookupRequired("ar"); err != nil {
-		return targetTools{}, err
-	}
-	if tools.ranlib, err = lookupRequired("ranlib"); err != nil {
-		return targetTools{}, err
-	}
-	if tools.strip, err = lookupRequired("strip"); err != nil {
-		return targetTools{}, err
-	}
-	if pkgConfig, err := lookPath(hostTriple + "-pkg-config"); err == nil {
-		tools.pkgConfig = pkgConfig
-	}
-
-	cacheDir := opts.cacheDir
-	if cacheDir == "" {
-		userCacheDir, err := os.UserCacheDir()
-		if err != nil {
-			return targetTools{}, err
-		}
-		cacheDir = filepath.Join(userCacheDir, ".llar", "crosscompile")
-	}
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return targetTools{}, err
-	}
-	tools.cmakeToolchainFile = filepath.Join(cacheDir, hostTriple+".cmake")
-	if err := writeCMakeToolchainFile(tools.cmakeToolchainFile, target, tools); err != nil {
-		return targetTools{}, err
-	}
-	return tools, nil
-}
-
-func gnuTriple(p platform) (string, error) {
-	switch p.OS + "/" + p.Arch {
-	case "linux/arm64":
-		return "aarch64-linux-gnu", nil
-	case "linux/amd64":
-		return "x86_64-linux-gnu", nil
-	default:
-		return "", fmt.Errorf("unsupported cross compile target %s/%s", p.OS, p.Arch)
 	}
 }
 
-func cmakeSystemName(osName string) string {
-	switch osName {
-	case "linux":
-		return "Linux"
-	default:
-		return osName
-	}
-}
+func TestTargetClassification(t *testing.T) {
+	host := Platform{Arch: "arm64", OS: "darwin"}
 
-func cmakeProcessor(arch string) string {
-	switch arch {
-	case "arm64":
-		return "aarch64"
-	case "amd64":
-		return "x86_64"
-	default:
-		return arch
-	}
-}
-
-func writeCMakeToolchainFile(path string, target platform, tools targetTools) error {
-	content := strings.Join([]string{
-		"set(CMAKE_SYSTEM_NAME " + cmakeSystemName(target.OS) + ")",
-		"set(CMAKE_SYSTEM_PROCESSOR " + cmakeProcessor(target.Arch) + ")",
-		"set(CMAKE_C_COMPILER " + tools.cc + ")",
-		"set(CMAKE_CXX_COMPILER " + tools.cxx + ")",
-		"set(CMAKE_AR " + tools.ar + ")",
-		"set(CMAKE_RANLIB " + tools.ranlib + ")",
-		"set(CMAKE_STRIP " + tools.strip + ")",
-		"",
-	}, "\n")
-	return os.WriteFile(path, []byte(content), 0o644)
-}
-```
-
-Update `newWithOptions` in `internal/build/crosscompile/crosscompile.go` so cross builds prepare tools:
-
-```go
-func newWithOptions(matrix string, opts options) (*CrossCompile, error) {
-	target, err := parseMatrix(matrix)
-	if err != nil {
-		return nil, err
-	}
-	cc := &CrossCompile{
-		enabled: target != opts.build,
-		build:   opts.build,
-		target:  target,
-	}
-	if cc.enabled {
-		tools, err := prepareTargetTools(target, opts)
-		if err != nil {
-			return nil, err
-		}
-		cc.tools = tools
-	}
-	return cc, nil
-}
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run:
-
-```bash
-go test ./internal/build/crosscompile
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add internal/build/crosscompile/crosscompile.go internal/build/crosscompile/tools.go internal/build/crosscompile/crosscompile_test.go
-git commit -m "feat(build): probe cross compile target tools"
-```
-
-## Task 3: Implement Command Patches
-
-**Files:**
-- Create: `internal/build/crosscompile/rules.go`
-- Modify: `internal/build/crosscompile/crosscompile.go`
-- Modify: `internal/build/crosscompile/crosscompile_test.go`
-
-- [ ] **Step 1: Add failing command patch tests**
-
-Append to `internal/build/crosscompile/crosscompile_test.go`:
-
-```go
-func newTestCrossCompile(t *testing.T) *CrossCompile {
-	t.Helper()
-	cc, err := newWithOptions("arm64-linux", options{
-		build: platform{OS: "darwin", Arch: "arm64"},
-		lookPath: func(name string) (string, error) {
-			return "/fake/bin/" + name, nil
-		},
-		cacheDir: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("newWithOptions: %v", err)
-	}
-	return cc
-}
-
-func TestUsePatchesCMakeConfigure(t *testing.T) {
-	cc := newTestCrossCompile(t)
-
-	patch := cc.Use(Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
-
-	want := "-DCMAKE_TOOLCHAIN_FILE=" + cc.tools.cmakeToolchainFile
-	if !contains(patch.AppendArg, want) {
-		t.Fatalf("AppendArg = %#v, want %q", patch.AppendArg, want)
-	}
-}
-
-func TestUseDoesNotOverrideExplicitCMakeToolchain(t *testing.T) {
-	cc := newTestCrossCompile(t)
-
-	patch := cc.Use(Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build", "-DCMAKE_TOOLCHAIN_FILE=/user/toolchain.cmake"}})
-
-	if len(patch.AppendArg) != 0 {
-		t.Fatalf("AppendArg = %#v, want empty", patch.AppendArg)
-	}
-}
-
-func TestUsePatchesConfigure(t *testing.T) {
-	cc := newTestCrossCompile(t)
-
-	patch := cc.Use(Command{Name: "./configure", Args: []string{"--prefix=/out"}})
-
-	if !contains(patch.AppendArg, "--host=aarch64-linux-gnu") {
-		t.Fatalf("AppendArg = %#v, want --host", patch.AppendArg)
-	}
-	if !contains(patch.AppendArg, "--build=arm64-darwin") {
-		t.Fatalf("AppendArg = %#v, want --build", patch.AppendArg)
-	}
-	if patch.SetEnv["CC"] != "/fake/bin/aarch64-linux-gnu-gcc" {
-		t.Fatalf("CC env = %q", patch.SetEnv["CC"])
-	}
-	if patch.SetEnv["AR"] != "/fake/bin/aarch64-linux-gnu-ar" {
-		t.Fatalf("AR env = %q", patch.SetEnv["AR"])
-	}
-}
-
-func TestUsePatchesDirectCompilerAndBinutils(t *testing.T) {
-	cc := newTestCrossCompile(t)
 	tests := []struct {
-		name string
-		want string
+		name        string
+		matrix      string
+		wantNative  bool
+		wantGlibc   bool
 	}{
-		{"cc", "/fake/bin/aarch64-linux-gnu-gcc"},
-		{"gcc", "/fake/bin/aarch64-linux-gnu-gcc"},
-		{"c++", "/fake/bin/aarch64-linux-gnu-g++"},
-		{"g++", "/fake/bin/aarch64-linux-gnu-g++"},
-		{"ar", "/fake/bin/aarch64-linux-gnu-ar"},
-		{"ranlib", "/fake/bin/aarch64-linux-gnu-ranlib"},
-		{"strip", "/fake/bin/aarch64-linux-gnu-strip"},
+		{name: "native", matrix: "arm64-darwin", wantNative: true, wantGlibc: false},
+		{name: "cross linux", matrix: "amd64-linux", wantNative: false, wantGlibc: true},
+		{name: "cross darwin", matrix: "amd64-darwin", wantNative: false, wantGlibc: false},
+		{name: "no os", matrix: "arm64", wantNative: false, wantGlibc: false},
 	}
+
 	for _, tt := range tests {
-		patch := cc.Use(Command{Name: tt.name})
-		if patch.Name != tt.want {
-			t.Fatalf("%s patch.Name = %q, want %q", tt.name, patch.Name, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			target, err := Parse(tt.matrix)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if got := target.IsNative(host); got != tt.wantNative {
+				t.Fatalf("IsNative = %v, want %v", got, tt.wantNative)
+			}
+			if got := target.NeedsDefaultGlibc(host); got != tt.wantGlibc {
+				t.Fatalf("NeedsDefaultGlibc = %v, want %v", got, tt.wantGlibc)
+			}
+		})
 	}
-}
-
-func TestUsePatchesPkgConfig(t *testing.T) {
-	cc := newTestCrossCompile(t)
-
-	patch := cc.Use(Command{Name: "pkg-config", Args: []string{"--libs", "zlib"}})
-
-	if patch.Name != "/fake/bin/aarch64-linux-gnu-pkg-config" {
-		t.Fatalf("patch.Name = %q", patch.Name)
-	}
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Run the test to verify it fails**
 
 Run:
 
 ```bash
-go test ./internal/build/crosscompile
+go test ./internal/build/buildtarget
 ```
 
-Expected: FAIL because `Use` still returns a zero patch.
+Expected: FAIL because `internal/build/buildtarget` does not exist.
 
-- [ ] **Step 3: Implement command patch rules**
+- [ ] **Step 3: Implement the parser**
 
-Create `internal/build/crosscompile/rules.go`:
+Create `internal/build/buildtarget/target.go`:
 
 ```go
-package crosscompile
+package buildtarget
 
 import (
-	"path/filepath"
+	"fmt"
 	"strings"
 )
 
-func (c *CrossCompile) useCMake(cmd Command) Patch {
-	if !isCMakeConfigure(cmd.Args) || hasCMakeToolchain(cmd.Args) {
-		return Patch{}
-	}
-	return Patch{AppendArg: []string{"-DCMAKE_TOOLCHAIN_FILE=" + c.tools.cmakeToolchainFile}}
+type Platform struct {
+	Arch string
+	OS   string
 }
 
-func (c *CrossCompile) useConfigure(cmd Command) Patch {
-	args := make([]string, 0, 2)
-	if !hasPrefixArg(cmd.Args, "--host=") {
-		args = append(args, "--host="+c.tools.hostTriple)
+func Parse(matrix string) (Platform, error) {
+	if matrix == "" {
+		return Platform{}, fmt.Errorf("invalid matrix %q: empty", matrix)
 	}
-	if !hasPrefixArg(cmd.Args, "--build=") {
-		args = append(args, "--build="+c.tools.buildTriple)
-	}
-	return Patch{
-		AppendArg: args,
-		SetEnv: map[string]string{
-			"CC":     c.tools.cc,
-			"CXX":    c.tools.cxx,
-			"AR":     c.tools.ar,
-			"RANLIB": c.tools.ranlib,
-			"STRIP":  c.tools.strip,
-		},
-	}
-}
-
-func (c *CrossCompile) usePkgConfig() Patch {
-	patch := Patch{SetEnv: map[string]string{}}
-	if c.tools.pkgConfig != "" {
-		patch.Name = c.tools.pkgConfig
-	}
-	if c.tools.sysroot != "" {
-		patch.SetEnv["PKG_CONFIG_SYSROOT_DIR"] = c.tools.sysroot
-		patch.SetEnv["PKG_CONFIG_LIBDIR"] = filepath.Join(c.tools.sysroot, "usr", "lib", "pkgconfig")
-	}
-	if len(patch.SetEnv) == 0 {
-		patch.SetEnv = nil
-	}
-	return patch
-}
-
-func isCMakeConfigure(args []string) bool {
-	return hasExactArg(args, "-S") && hasExactArg(args, "-B")
-}
-
-func hasCMakeToolchain(args []string) bool {
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-DCMAKE_TOOLCHAIN_FILE=") ||
-			strings.HasPrefix(arg, "-DCMAKE_TOOLCHAIN_FILE:") {
-			return true
+	parts := strings.Split(matrix, "-")
+	switch len(parts) {
+	case 1:
+		if parts[0] == "" {
+			return Platform{}, fmt.Errorf("invalid matrix %q: empty arch", matrix)
 		}
-	}
-	return false
-}
-
-func hasExactArg(args []string, want string) bool {
-	for _, arg := range args {
-		if arg == want {
-			return true
+		return Platform{Arch: parts[0]}, nil
+	case 2:
+		if parts[0] == "" || parts[1] == "" {
+			return Platform{}, fmt.Errorf("invalid matrix %q: want <arch>-<os>", matrix)
 		}
+		return Platform{Arch: parts[0], OS: parts[1]}, nil
+	default:
+		return Platform{}, fmt.Errorf("invalid matrix %q: want <arch> or <arch>-<os>", matrix)
 	}
-	return false
 }
 
-func hasPrefixArg(args []string, prefix string) bool {
-	for _, arg := range args {
-		if strings.HasPrefix(arg, prefix) {
-			return true
-		}
-	}
-	return false
+func (p Platform) IsNative(host Platform) bool {
+	return p.Arch == host.Arch && p.OS != "" && p.OS == host.OS
 }
 
-func isConfigureName(name string) bool {
-	base := filepath.Base(name)
-	return base == "configure" || name == "./configure"
+func (p Platform) NeedsDefaultGlibc(host Platform) bool {
+	return p.OS == "linux" && !p.IsNative(host)
 }
 ```
 
-Update `Use` in `internal/build/crosscompile/crosscompile.go`:
-
-```go
-func (c *CrossCompile) Use(cmd Command) Patch {
-	if c == nil || !c.enabled {
-		return Patch{}
-	}
-	switch filepath.Base(cmd.Name) {
-	case "cmake":
-		return c.useCMake(cmd)
-	case "pkg-config":
-		return c.usePkgConfig()
-	case "cc", "gcc":
-		return Patch{Name: c.tools.cc}
-	case "c++", "g++":
-		return Patch{Name: c.tools.cxx}
-	case "ar":
-		return Patch{Name: c.tools.ar}
-	case "ranlib":
-		return Patch{Name: c.tools.ranlib}
-	case "strip":
-		return Patch{Name: c.tools.strip}
-	}
-	if isConfigureName(cmd.Name) {
-		return c.useConfigure(cmd)
-	}
-	return Patch{}
-}
-```
-
-Add `path/filepath` to the import list in `internal/build/crosscompile/crosscompile.go`.
-
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Run the test to verify it passes**
 
 Run:
 
 ```bash
-go test ./internal/build/crosscompile
+go test ./internal/build/buildtarget
 ```
 
 Expected: PASS.
@@ -715,411 +207,827 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/build/crosscompile
-git commit -m "feat(build): patch cross compile commands"
+git add internal/build/buildtarget
+git commit -m "feat(build): add matrix target parser"
 ```
 
-## Task 4: Wire CrossCompile Into Builder Middleware
+## Task 2: Inject Hidden `glibc` Before MVS
 
 **Files:**
-- Modify: `internal/build/build.go`
-- Modify: `internal/build/build_test.go`
+- Modify: `internal/modules/load.go`
+- Modify: `internal/modules/load_test.go`
+- Create: `internal/modules/testdata/load/glibc/versions.json`
+- Create: `internal/modules/testdata/load/glibc/2.39/Glibc_llar.gox`
+- Create: `internal/modules/testdata/load/glibc/2.40/Glibc_llar.gox`
 
-- [ ] **Step 1: Add failing tests for patch application**
+- [ ] **Step 1: Add the `glibc` formula fixtures**
 
-Append to `internal/build/build_test.go`:
+Before this step, read `/Users/haolan/.codex/skills/write-formula/SKILL.md` and verify the `.gox` syntax used below against existing formula fixtures in this repository.
+
+Create `internal/modules/testdata/load/glibc/versions.json`:
+
+```json
+{
+  "path": "glibc",
+  "deps": {}
+}
+```
+
+Create `internal/modules/testdata/load/glibc/2.39/Glibc_llar.gox`:
 
 ```go
-func TestApplyCrossCompilePatch(t *testing.T) {
-	req := execbroker.Request{
-		Name: "cmake",
-		Args: []string{"-S", ".", "-B", "build"},
-		Env:  []string{"PATH=/usr/bin", "CC=cc"},
-	}
-	patch := crosscompile.Patch{
-		Name:      "/opt/cmake",
-		AppendArg: []string{"-DCMAKE_TOOLCHAIN_FILE=/tmp/tc.cmake"},
-		SetEnv: map[string]string{
-			"CC": "aarch64-linux-gnu-gcc",
-		},
-		PrependEnv: map[string][]string{
-			"PATH": []string{"/opt/cross/bin"},
-		},
+id "glibc"
+
+fromVer "2.39"
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "--sysroot=" + ctx.outputDir()
+}
+```
+
+Create `internal/modules/testdata/load/glibc/2.40/Glibc_llar.gox`:
+
+```go
+id "glibc"
+
+fromVer "2.40"
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "--sysroot=" + ctx.outputDir()
+}
+```
+
+- [ ] **Step 2: Write the failing module loading tests**
+
+Append to `internal/modules/load_test.go`:
+
+```go
+func TestLoad_CrossLinuxInjectsDefaultGlibc(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
+
+	mods, err := Load(ctx, main, Options{
+		FormulaStore: store,
+		MatrixStr:    "amd64-linux",
+		HostOS:       "darwin",
+		HostArch:     "arm64",
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
 	}
 
-	got := applyCrossCompilePatch(req, patch)
+	glibc := findModule(mods, "glibc")
+	if glibc == nil {
+		t.Fatalf("glibc not found in build list: %#v", mods)
+	}
+	if glibc.Version != "2.39" {
+		t.Fatalf("glibc version = %q, want 2.39", glibc.Version)
+	}
+	if mods[0].Path != "towner/standalone" {
+		t.Fatalf("mods[0].Path = %q, want root module", mods[0].Path)
+	}
+}
 
-	if got.Name != "/opt/cmake" {
-		t.Fatalf("Name = %q", got.Name)
+func TestLoad_DefaultGlibcSkippedForNativeDarwinAndNoOS(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
+
+	tests := []struct {
+		name   string
+		matrix string
+	}{
+		{name: "native", matrix: "arm64-darwin"},
+		{name: "cross darwin", matrix: "amd64-darwin"},
+		{name: "no os", matrix: "arm64"},
 	}
-	if strings.Join(got.Args, " ") != "-S . -B build -DCMAKE_TOOLCHAIN_FILE=/tmp/tc.cmake" {
-		t.Fatalf("Args = %#v", got.Args)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mods, err := Load(ctx, main, Options{
+				FormulaStore: store,
+				MatrixStr:    tt.matrix,
+				HostOS:       "darwin",
+				HostArch:     "arm64",
+			})
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			if glibc := findModule(mods, "glibc"); glibc != nil {
+				t.Fatalf("glibc unexpectedly found for %s: %+v", tt.matrix, glibc)
+			}
+		})
 	}
-	env := strings.Join(got.Env, "\n")
-	if !strings.Contains(env, "CC=aarch64-linux-gnu-gcc") {
-		t.Fatalf("Env missing CC override: %#v", got.Env)
+}
+
+func TestLoad_ExplicitGlibcRequirementParticipatesInMVS(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/withglibc", Version: "1.0.0"}
+
+	mods, err := Load(ctx, main, Options{
+		FormulaStore: store,
+		MatrixStr:    "amd64-linux",
+		HostOS:       "darwin",
+		HostArch:     "arm64",
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
 	}
-	if !strings.Contains(env, "PATH=/opt/cross/bin:/usr/bin") {
-		t.Fatalf("Env missing PATH prepend: %#v", got.Env)
+
+	glibc := findModule(mods, "glibc")
+	if glibc == nil {
+		t.Fatal("glibc not found")
+	}
+	if glibc.Version != "2.40" {
+		t.Fatalf("glibc version = %q, want explicit higher version 2.40", glibc.Version)
 	}
 }
 ```
 
-Add imports to `internal/build/build_test.go`:
+Create `internal/modules/testdata/load/towner/withglibc/versions.json`:
 
-```go
-	"github.com/goplus/llar/internal/build/crosscompile"
-	"github.com/goplus/llar/internal/execbroker"
+```json
+{
+  "path": "towner/withglibc",
+  "deps": {
+    "1.0.0": [
+      {
+        "path": "glibc",
+        "version": "2.40"
+      }
+    ]
+  }
+}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+Create `internal/modules/testdata/load/towner/withglibc/1.0.0/Withglibc_llar.gox`:
+
+```go
+id "towner/withglibc"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "-lwithglibc"
+}
+```
+
+- [ ] **Step 3: Run the focused tests to verify they fail**
 
 Run:
 
 ```bash
-go test ./internal/build -run TestApplyCrossCompilePatch
+go test ./internal/modules -run 'TestLoad_CrossLinuxInjectsDefaultGlibc|TestLoad_DefaultGlibcSkippedForNativeDarwinAndNoOS|TestLoad_ExplicitGlibcRequirementParticipatesInMVS'
 ```
 
-Expected: FAIL because `applyCrossCompilePatch` does not exist.
+Expected: FAIL because `Options` has no `MatrixStr`, `HostOS`, or `HostArch`, and hidden `glibc` is not injected.
 
-- [ ] **Step 3: Implement patch application and middleware install**
+- [ ] **Step 4: Implement matrix-aware default dependency injection**
 
-Modify imports in `internal/build/build.go`:
+Modify the imports in `internal/modules/load.go` to add:
 
 ```go
 	"runtime"
 
-	"github.com/goplus/llar/internal/build/crosscompile"
-	"github.com/goplus/llar/internal/execbroker"
+	"github.com/goplus/llar/internal/build/buildtarget"
 ```
 
-Before wiring `Build`, add a private interface and default constructor near the type definitions:
+Modify `type Options struct` in `internal/modules/load.go`:
 
 ```go
-type crossCompiler interface {
-	Use(crosscompile.Command) crosscompile.Patch
-}
+type Options struct {
+	// FormulaStore is the store for downloading and caching formulas.
+	FormulaStore repo.Store
 
-var newCrossCompile = func(matrix string) (crossCompiler, error) {
-	return crosscompile.New(matrix)
-}
-```
+	// MatrixStr is the active target matrix. Empty means no platform default
+	// dependencies are injected.
+	MatrixStr string
 
-Modify `Builder` in `internal/build/build.go`:
-
-```go
-type Builder struct {
-	store        repo.Store
-	matrix       string
-	runTest      bool
-	workspaceDir string
-	newRepo      func(repoPath string) (vcs.Repo, error)
-	newCrossCompile func(matrix string) (crossCompiler, error)
+	// HostOS and HostArch are test seams. Production callers leave them empty
+	// and the runtime host is used.
+	HostOS   string
+	HostArch string
 }
 ```
 
-In `NewBuilder`, set:
+Add this helper to `internal/modules/load.go`:
 
 ```go
-		newCrossCompile: newCrossCompile,
-```
+const defaultGlibcVersion = "2.39"
 
-In `setupBuilder` in `internal/build/build_test.go`, set the new seam:
-
-```go
-		newCrossCompile: func(matrix string) (crossCompiler, error) {
-			return noopCrossCompiler{}, nil
-		},
-```
-
-Add the no-op test implementation near other test helpers in `internal/build/build_test.go`:
-
-```go
-type noopCrossCompiler struct{}
-
-func (noopCrossCompiler) Use(crosscompile.Command) crosscompile.Patch {
-	return crosscompile.Patch{}
-}
-```
-
-This keeps existing build tests independent from the host machine's installed cross compilers. Individual tests that need middleware behavior override `b.newCrossCompile` explicitly.
-
-At the start of `Build`, before `builtResults := ...`, create and install the middleware:
-
-```go
-func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
-	cc, err := b.newCrossCompile(b.matrix)
+func defaultDepsForMatrix(matrix, hostOS, hostArch string) ([]module.Version, error) {
+	if matrix == "" {
+		return nil, nil
+	}
+	if hostOS == "" {
+		hostOS = runtime.GOOS
+	}
+	if hostArch == "" {
+		hostArch = runtime.GOARCH
+	}
+	target, err := buildtarget.Parse(matrix)
 	if err != nil {
 		return nil, err
 	}
-	restoreMiddleware := execbroker.SetMiddleware(func(req execbroker.Request) execbroker.Request {
-		patch := cc.Use(crosscompile.Command{
-			Name: req.Name,
-			Args: req.Args,
-			Env:  req.Env,
-		})
-		return applyCrossCompilePatch(req, patch)
-	})
-	defer restoreMiddleware()
-
-	builtResults := make(map[module.Version]classfile.BuildResult)
-```
-
-Add helpers near the bottom of `internal/build/build.go`:
-
-```go
-func applyCrossCompilePatch(req execbroker.Request, patch crosscompile.Patch) execbroker.Request {
-	if patch.Name != "" {
-		req.Name = patch.Name
+	host := buildtarget.Platform{OS: hostOS, Arch: hostArch}
+	if !target.NeedsDefaultGlibc(host) {
+		return nil, nil
 	}
-	if len(patch.PrependArg) > 0 {
-		req.Args = append(append([]string(nil), patch.PrependArg...), req.Args...)
-	}
-	if len(patch.AppendArg) > 0 {
-		req.Args = append(append([]string(nil), req.Args...), patch.AppendArg...)
-	}
-	if len(patch.SetEnv) > 0 || len(patch.PrependEnv) > 0 {
-		req.Env = applyEnvPatch(req.Env, patch)
-	}
-	return req
+	return []module.Version{{Path: "glibc", Version: defaultGlibcVersion}}, nil
 }
 
-func applyEnvPatch(env []string, patch crosscompile.Patch) []string {
-	values := make(map[string]string)
-	order := make([]string, 0, len(env)+len(patch.SetEnv)+len(patch.PrependEnv))
-	for _, item := range env {
-		key, value, ok := strings.Cut(item, "=")
-		if !ok {
-			continue
-		}
-		if _, exists := values[key]; !exists {
-			order = append(order, key)
-		}
-		values[key] = value
+func appendDefaultDeps(deps []module.Version, defaults []module.Version) []module.Version {
+	if len(defaults) == 0 {
+		return deps
 	}
-	for key, value := range patch.SetEnv {
-		if _, exists := values[key]; !exists {
-			order = append(order, key)
-		}
-		values[key] = value
-	}
-	sep := ":"
-	if runtime.GOOS == "windows" {
-		sep = ";"
-	}
-	for key, valuesToPrepend := range patch.PrependEnv {
-		if _, exists := values[key]; !exists {
-			order = append(order, key)
-		}
-		prefix := strings.Join(valuesToPrepend, sep)
-		if cur := values[key]; cur != "" {
-			values[key] = prefix + sep + cur
-		} else {
-			values[key] = prefix
-		}
-	}
-	out := make([]string, 0, len(order))
-	for _, key := range order {
-		out = append(out, key+"="+values[key])
-	}
+	out := append([]module.Version(nil), deps...)
+	out = append(out, defaults...)
 	return out
 }
 ```
 
-Remove the `runtime` import if the file already has a platform-specific path separator helper by the time this task is executed.
+In `Load`, immediately after `mainDeps` is resolved, replace:
 
-- [ ] **Step 4: Run focused tests**
+```go
+	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula)
+	if err != nil {
+		return nil, err
+	}
+```
+
+with:
+
+```go
+	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula)
+	if err != nil {
+		return nil, err
+	}
+	defaultDeps, err := defaultDepsForMatrix(opts.MatrixStr, opts.HostOS, opts.HostArch)
+	if err != nil {
+		return nil, err
+	}
+	mainDeps = appendDefaultDeps(mainDeps, defaultDeps)
+```
+
+- [ ] **Step 5: Run the focused tests to verify they pass or expose ixgo linker blocker**
 
 Run:
 
 ```bash
-go test ./internal/build -run TestApplyCrossCompilePatch
+go test ./internal/modules -run 'TestLoad_CrossLinuxInjectsDefaultGlibc|TestLoad_DefaultGlibcSkippedForNativeDarwinAndNoOS|TestLoad_ExplicitGlibcRequirementParticipatesInMVS'
 ```
 
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+Expected: PASS. If the local ixgo linker fails with `invalid reference to math/rand/v2.globalRand`, record that exact blocker and run:
 
 ```bash
-git add internal/build/build.go internal/build/build_test.go
-git commit -m "feat(build): install crosscompile middleware"
+go test ./internal/build/buildtarget ./mod/module ./mod/versions
 ```
 
-## Task 5: Add Build-Level Middleware Behavior Test
+Expected fallback: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add internal/build/buildtarget internal/modules/load.go internal/modules/load_test.go internal/modules/testdata/load/glibc internal/modules/testdata/load/towner/withglibc
+git commit -m "feat(modules): inject default glibc for cross linux"
+```
+
+## Task 3: Add Matrix Options To CLI Build Loading
+
+**Files:**
+- Modify: `cmd/llar/internal/make.go`
+- Modify: `cmd/llar/internal/test.go`
+
+- [ ] **Step 1: Update `buildModule` to pass matrix into `modules.Load`**
+
+In `cmd/llar/internal/make.go`, replace:
+
+```go
+	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
+		FormulaStore: store,
+	})
+```
+
+with:
+
+```go
+	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
+		FormulaStore: store,
+		MatrixStr:    matrixStr,
+	})
+```
+
+No separate edit is needed in `cmd/llar/internal/test.go` if it calls the same `buildModule` helper.
+
+- [ ] **Step 2: Run the package build**
+
+Run:
+
+```bash
+go build ./cmd/llar/internal
+```
+
+Expected: PASS. If the local ixgo linker fails with `invalid reference to math/rand/v2.globalRand`, record the blocker.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add cmd/llar/internal/make.go
+git commit -m "fix(cmd): pass matrix to module loading"
+```
+
+## Task 4: Add Source-Less Build Path For Official `glibc`
+
+**Files:**
+- Modify: `internal/build/build.go`
+- Modify: `internal/build/build_test.go`
+- Create: `internal/build/testdata/formulas/glibc/versions.json`
+- Create: `internal/build/testdata/formulas/glibc/2.39/Glibc_llar.gox`
+
+- [ ] **Step 1: Add the build fixture**
+
+Before this step, read `/Users/haolan/.codex/skills/write-formula/SKILL.md` and verify the `.gox` syntax used below against existing formula fixtures in this repository.
+
+Create `internal/build/testdata/formulas/glibc/versions.json`:
+
+```json
+{
+  "path": "glibc",
+  "deps": {}
+}
+```
+
+Create `internal/build/testdata/formulas/glibc/2.39/Glibc_llar.gox`:
+
+```go
+id "glibc"
+
+fromVer "2.39"
+
+onBuild (ctx, proj, out) => {
+	dir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	out.setMetadata "--sysroot=" + dir
+}
+```
+
+- [ ] **Step 2: Write the failing build test**
+
+Append to `internal/build/build_test.go`:
+
+```go
+func TestBuild_SourceLessGlibcDoesNotCloneGithubGlibc(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.newRepo = func(repoPath string) (vcs.Repo, error) {
+		if repoPath == "github.com/glibc" {
+			return nil, fmt.Errorf("unexpected source clone for %s", repoPath)
+		}
+		modPath := strings.TrimPrefix(repoPath, "github.com/")
+		return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
+	}
+
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, module.Version{Path: "glibc", Version: "2.39"}, modules.Options{
+		FormulaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("modules.Load: %v", err)
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if !strings.HasPrefix(results[0].Metadata, "--sysroot=") {
+		t.Fatalf("metadata = %q, want sysroot metadata", results[0].Metadata)
+	}
+}
+```
+
+- [ ] **Step 3: Run the focused test to verify it fails**
+
+Run:
+
+```bash
+go test ./internal/build -run TestBuild_SourceLessGlibcDoesNotCloneGithubGlibc
+```
+
+Expected: FAIL with `unexpected source clone for github.com/glibc`.
+
+- [ ] **Step 4: Implement official source-less source setup**
+
+Add this helper near other private helpers in `internal/build/build.go`:
+
+```go
+func isSourceLessOfficialPackage(modPath string) bool {
+	return modPath == "glibc"
+}
+```
+
+In the `build` closure in `internal/build/build.go`, replace the source clone block:
+
+```go
+		// Before we start to build, clone source to tmpSourceDir
+		// And switch current dir to it.
+		repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
+		if err != nil {
+			return Result{}, err
+		}
+		if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
+			return Result{}, err
+		}
+```
+
+with:
+
+```go
+		if !isSourceLessOfficialPackage(mod.Path) {
+			// Before we start to build, clone source to tmpSourceDir
+			// And switch current dir to it.
+			repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
+			if err != nil {
+				return Result{}, err
+			}
+			if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
+				return Result{}, err
+			}
+		}
+```
+
+- [ ] **Step 5: Run the focused test**
+
+Run:
+
+```bash
+go test ./internal/build -run TestBuild_SourceLessGlibcDoesNotCloneGithubGlibc
+```
+
+Expected: PASS. If the local ixgo linker fails with `invalid reference to math/rand/v2.globalRand`, record the blocker.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add internal/build/build.go internal/build/build_test.go internal/build/testdata/formulas/glibc
+git commit -m "feat(build): support source-less glibc package"
+```
+
+## Task 5: Add Build Helper For Selected `glibc` Sysroot Metadata
 
 **Files:**
 - Modify: `internal/build/build.go`
 - Modify: `internal/build/build_test.go`
 
-- [ ] **Step 1: Add failing test for middleware use and restore**
+- [ ] **Step 1: Write the failing helper tests**
 
 Append to `internal/build/build_test.go`:
 
 ```go
-type fakeCrossCompiler struct {
-	seen []crosscompile.Command
-}
+func TestDefaultSysrootMetadataReturnsSelectedGlibcMetadata(t *testing.T) {
+	var glibcResult classfile.BuildResult
+	glibcResult.SetMetadata("--sysroot=/fake/glibc")
 
-func (f *fakeCrossCompiler) Use(cmd crosscompile.Command) crosscompile.Patch {
-	f.seen = append(f.seen, cmd)
-	if cmd.Name == "llar-crosscompile-probe" {
-		return crosscompile.Patch{
-			Name: os.Args[0],
-			AppendArg: []string{"-test.run=TestBuildCrossCompileHelperProcess"},
-			SetEnv: map[string]string{
-				"LLAR_BUILDER_CROSSCOMPILE_HELPER": "1",
-			},
-		}
+	targets := []*modules.Module{
+		{Path: "test/app", Version: "1.0.0"},
+		{Path: "glibc", Version: "2.39"},
 	}
-	return crosscompile.Patch{}
-}
-
-func TestBuildInstallsCrossCompileMiddleware(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "arm64-linux")
-	fake := &fakeCrossCompiler{}
-	b.newCrossCompile = func(matrix string) (crossCompiler, error) {
-		if matrix != "arm64-linux" {
-			t.Fatalf("matrix = %q, want arm64-linux", matrix)
-		}
-		return fake, nil
+	results := map[module.Version]classfile.BuildResult{
+		{Path: "glibc", Version: "2.39"}: glibcResult,
 	}
 
-	loadedFormula := &loadedformula.Formula{
-		ModPath: "test/probe",
-		FromVer: "1.0.0",
-		OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-			data, err := execbroker.Command("llar-crosscompile-probe").Output()
-			if err != nil {
-				out.AddErr(err)
-				return
-			}
-			out.SetMetadata(string(data))
-		},
+	got, ok := defaultSysrootMetadata(targets, results)
+	if !ok {
+		t.Fatal("defaultSysrootMetadata ok = false, want true")
 	}
-	target := &modules.Module{
-		Formula: loadedFormula,
-		FS:      os.DirFS(t.TempDir()),
-		Path:    "test/probe",
-		Version: "1.0.0",
-	}
-
-	results, err := b.Build(context.Background(), []*modules.Module{target})
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if len(results) != 1 || results[0].Metadata != "crosscompile-ok" {
-		t.Fatalf("results = %#v, want metadata crosscompile-ok", results)
-	}
-	if len(fake.seen) == 0 {
-		t.Fatal("cross compiler did not see any commands")
-	}
-
-	req := execbroker.Command("llar-crosscompile-probe")
-	if req.Path == os.Args[0] {
-		t.Fatal("execbroker middleware was not restored after Build")
+	if got != "--sysroot=/fake/glibc" {
+		t.Fatalf("metadata = %q, want --sysroot=/fake/glibc", got)
 	}
 }
 
-func TestBuildCrossCompileHelperProcess(t *testing.T) {
-	if os.Getenv("LLAR_BUILDER_CROSSCOMPILE_HELPER") != "1" {
-		return
+func TestDefaultSysrootMetadataSkipsMissingOrEmptyGlibc(t *testing.T) {
+	targets := []*modules.Module{
+		{Path: "test/app", Version: "1.0.0"},
+		{Path: "glibc", Version: "2.39"},
 	}
-	fmt.Print("crosscompile-ok")
-	os.Exit(0)
+	if got, ok := defaultSysrootMetadata(targets, nil); ok || got != "" {
+		t.Fatalf("missing result: metadata=%q ok=%v, want empty false", got, ok)
+	}
+
+	results := map[module.Version]classfile.BuildResult{
+		{Path: "glibc", Version: "2.39"}: {},
+	}
+	if got, ok := defaultSysrootMetadata(targets, results); ok || got != "" {
+		t.Fatalf("empty result: metadata=%q ok=%v, want empty false", got, ok)
+	}
 }
 ```
 
-Ensure these imports exist in `internal/build/build_test.go`:
-
-```go
-	loadedformula "github.com/goplus/llar/internal/formula"
-	"github.com/goplus/llar/internal/execbroker"
-```
-
-The file already imports `context`, `fmt`, `os`, and the public formula package alias used above:
-
-```go
-	classfile "github.com/goplus/llar/formula"
-```
-
-- [ ] **Step 2: Run the focused test**
+- [ ] **Step 2: Run the focused test to verify it fails**
 
 Run:
 
 ```bash
-go test ./internal/build -run 'TestBuildInstallsCrossCompileMiddleware|TestBuildCrossCompileHelperProcess'
+go test ./internal/build -run 'TestDefaultSysrootMetadataReturnsSelectedGlibcMetadata|TestDefaultSysrootMetadataSkipsMissingOrEmptyGlibc'
 ```
 
-Expected: PASS after the test seam and middleware are wired correctly.
+Expected: FAIL because `defaultSysrootMetadata` does not exist, or because the ixgo linker blocker appears.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Implement selected `glibc` metadata lookup**
+
+Add these helpers near other private helpers in `internal/build/build.go`:
+
+```go
+func selectedGlibc(targets []*modules.Module) (module.Version, bool) {
+	for _, target := range targets {
+		if target.Path == "glibc" {
+			return module.Version{Path: target.Path, Version: target.Version}, true
+		}
+	}
+	return module.Version{}, false
+}
+
+func defaultSysrootMetadata(targets []*modules.Module, results map[module.Version]classfile.BuildResult) (string, bool) {
+	glibc, ok := selectedGlibc(targets)
+	if !ok {
+		return "", false
+	}
+	result, ok := results[glibc]
+	if !ok {
+		return "", false
+	}
+	metadata := result.Metadata()
+	if metadata == "" {
+		return "", false
+	}
+	return metadata, true
+}
+```
+
+Do not call the helper from the build loop in this task. The tests are in package `build`, so they can verify the unexported helper directly. The next plan will call this helper from middleware/sysroot environment patching.
+
+- [ ] **Step 4: Run the focused test**
+
+Run:
+
+```bash
+go test ./internal/build -run 'TestDefaultSysrootMetadataReturnsSelectedGlibcMetadata|TestDefaultSysrootMetadataSkipsMissingOrEmptyGlibc'
+```
+
+Expected: PASS, unless the ixgo linker blocker appears.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add internal/build/build.go internal/build/build_test.go
-git commit -m "test(build): verify crosscompile middleware lifecycle"
+git commit -m "feat(build): identify selected glibc sysroot metadata"
 ```
 
-## Task 6: Final Verification and Cleanup
+## Task 6: Add Build Cache Variant For Selected `glibc`
 
 **Files:**
-- Review: `internal/build/crosscompile/*.go`
-- Review: `internal/build/build.go`
-- Review: `internal/build/build_test.go`
+- Modify: `internal/build/cache.go`
+- Modify: `internal/build/build.go`
+- Modify: `internal/build/cache_test.go`
+- Modify: `internal/build/build_test.go`
 
-- [ ] **Step 1: Format touched Go files**
+- [ ] **Step 1: Write failing cache variant tests**
+
+Append to `internal/build/cache_test.go`:
+
+```go
+func TestBuildVariantIncludesGlibcVersion(t *testing.T) {
+	got := buildVariant("amd64-linux", "2.39")
+	want := "amd64-linux+glibc-2.39"
+	if got != want {
+		t.Fatalf("buildVariant = %q, want %q", got, want)
+	}
+}
+
+func TestBuildVariantWithoutGlibcUsesMatrix(t *testing.T) {
+	got := buildVariant("arm64-darwin", "")
+	want := "arm64-darwin"
+	if got != want {
+		t.Fatalf("buildVariant = %q, want %q", got, want)
+	}
+}
+```
+
+- [ ] **Step 2: Run the focused tests to verify they fail**
 
 Run:
 
 ```bash
-gofmt -w internal/build/crosscompile/*.go internal/build/build.go internal/build/build_test.go
+go test ./internal/build -run 'TestBuildVariantIncludesGlibcVersion|TestBuildVariantWithoutGlibcUsesMatrix'
+```
+
+Expected: FAIL because `buildVariant` does not exist.
+
+- [ ] **Step 3: Implement variant helper and use it in cache keys**
+
+Add to `internal/build/cache.go`:
+
+```go
+func buildVariant(matrix, glibcVersion string) string {
+	if glibcVersion == "" {
+		return matrix
+	}
+	return matrix + "+glibc-" + glibcVersion
+}
+```
+
+Add this helper to `internal/build/build.go`:
+
+```go
+func selectedGlibcVersion(targets []*modules.Module) string {
+	for _, target := range targets {
+		if target.Path == "glibc" {
+			return target.Version
+		}
+	}
+	return ""
+}
+```
+
+At the start of `Build`, after `rootID` is computed, add:
+
+```go
+	variant := buildVariant(b.matrix, selectedGlibcVersion(targets))
+```
+
+Replace cache lookups in `internal/build/build.go`:
+
+```go
+if entry, ok := cache.get(mod.Version, b.matrix); ok {
+```
+
+with:
+
+```go
+if entry, ok := cache.get(mod.Version, variant); ok {
+```
+
+Replace cache writes:
+
+```go
+cache.set(mod.Version, b.matrix, &buildEntry{
+```
+
+with:
+
+```go
+cache.set(mod.Version, variant, &buildEntry{
+```
+
+Replace install dir lookup inside `build`:
+
+```go
+dir, _ := b.installDir(mod.Path, mod.Version)
+```
+
+with:
+
+```go
+dir, _ := b.installDirForVariant(mod.Path, mod.Version, variant)
+```
+
+Add this helper to `internal/build/cache.go`:
+
+```go
+func (b *Builder) installDirForVariant(modPath, version, variant string) (string, error) {
+	escaped, err := module.EscapePath(modPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(b.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, version, variant)), nil
+}
+```
+
+Change existing `installDir` in `internal/build/cache.go` to delegate:
+
+```go
+func (b *Builder) installDir(modPath, version string) (string, error) {
+	return b.installDirForVariant(modPath, version, b.matrix)
+}
+```
+
+In `internal/build/build.go`, replace calls that need the active build output path with `installDirForVariant(..., variant)`:
+
+```go
+installDir, err := b.installDirForVariant(mod.Path, mod.Version, variant)
+```
+
+and:
+
+```go
+return b.installDirForVariant(m.Path, m.Version, variant)
+```
+
+- [ ] **Step 4: Run focused cache tests**
+
+Run:
+
+```bash
+go test ./internal/build -run 'TestBuildVariantIncludesGlibcVersion|TestBuildVariantWithoutGlibcUsesMatrix|TestCacheKey|TestInstallDir'
+```
+
+Expected: PASS, unless the ixgo linker blocker appears.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/build/cache.go internal/build/build.go internal/build/cache_test.go internal/build/build_test.go
+git commit -m "feat(build): include glibc in build variant"
+```
+
+## Task 7: Final Verification
+
+**Files:**
+- Review all files changed by Tasks 1-6.
+
+- [ ] **Step 1: Format changed Go files**
+
+Run:
+
+```bash
+gofmt -w internal/build/buildtarget/target.go internal/build/buildtarget/target_test.go internal/modules/load.go internal/modules/load_test.go internal/build/build.go internal/build/build_test.go internal/build/cache.go internal/build/cache_test.go
 ```
 
 Expected: command exits 0.
 
-- [ ] **Step 2: Run focused tests**
+- [ ] **Step 2: Run non-ixgo package checks**
 
 Run:
 
 ```bash
-go test ./internal/build/crosscompile ./internal/build
+go test ./internal/build/buildtarget ./mod/module ./mod/versions ./internal/formula/repo
 ```
 
 Expected: PASS.
 
-- [ ] **Step 3: Run broader build verification**
+- [ ] **Step 3: Run focused affected tests**
 
 Run:
 
 ```bash
-go build -ldflags='-checklinkname=0' ./...
+go test ./internal/modules ./internal/build
+```
+
+Expected: PASS. If the environment fails with `invalid reference to math/rand/v2.globalRand`, record the blocker in the implementation notes and include the exact command output.
+
+- [ ] **Step 4: Run build checks that currently compile in this environment**
+
+Run:
+
+```bash
+go build ./x/cmake ./x/autotools ./internal/execbroker ./internal/formula/repo ./mod/module ./mod/versions
 ```
 
 Expected: PASS.
 
-- [ ] **Step 4: Inspect diff for module-boundary violations**
+- [ ] **Step 5: Commit final formatting if needed**
 
 Run:
 
 ```bash
-rg -n 'internal/execbroker' internal/build/crosscompile || true
-rg -n 'crosscompile' formula internal/formula x || true
-git diff --stat
+git status --short
 ```
 
-Expected:
-
-- First `rg` prints nothing.
-- Second `rg` prints nothing outside intentional build integration.
-- Diff contains only `internal/build/crosscompile`, `internal/build/build.go`, and `internal/build/build_test.go` unless previous tasks intentionally changed another listed file.
-
-- [ ] **Step 5: Commit any final cleanup**
-
-If formatting or cleanup changed files after the last task:
+If only formatting or test fixture changes from this plan remain, commit them:
 
 ```bash
-git add internal/build/crosscompile internal/build/build.go internal/build/build_test.go
-git commit -m "chore(build): verify crosscompile integration"
+git add internal/build/buildtarget internal/modules/load.go internal/modules/load_test.go internal/modules/testdata/load/glibc internal/modules/testdata/load/towner/withglibc internal/build/build.go internal/build/build_test.go internal/build/cache.go internal/build/cache_test.go internal/build/testdata/formulas/glibc internal/build/testdata/formulas/test/ctxcheck/1.0.0/Ctxcheck_llar.gox cmd/llar/internal/make.go
+git commit -m "chore(build): verify cross compile foundation"
 ```
 
-If there are no changes, do not create an empty commit.
+Expected: either a commit is created or there are no remaining plan changes to commit.
+
+## Self-Review
+
+Spec coverage:
+
+- Matrix selects target platform: Task 1.
+- Cross-Linux hidden `glibc`: Task 2.
+- Native/Darwin/no-os skip rules: Task 2.
+- `glibc` as single-segment official package: Task 2 fixtures and Task 4 source-less build path.
+- `glibc` metadata as sysroot source: Tasks 4 and 5.
+- Cache variant includes selected `glibc`: Task 6.
+
+Placeholder scan:
+
+- No task contains banned placeholder instructions.
+- Each code-changing step includes exact file paths and code snippets.
+- Each test step includes an exact command and expected result.
+
+Type consistency:
+
+- `buildtarget.Platform`, `Parse`, `IsNative`, and `NeedsDefaultGlibc` are defined in Task 1 before Task 2 imports them.
+- `Options.MatrixStr`, `Options.HostOS`, and `Options.HostArch` are defined in Task 2 before Task 3 passes `MatrixStr`.
+- `buildVariant` and `installDirForVariant` are defined in Task 6 before use in `build.go`.

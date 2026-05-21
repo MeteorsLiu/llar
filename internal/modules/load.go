@@ -75,6 +75,13 @@ type Options struct {
 
 const defaultGlibcVersion = "2.39"
 
+func sourceRepoPath(modPath string) string {
+	if strings.Contains(modPath, "/") {
+		return fmt.Sprintf("github.com/%s", modPath)
+	}
+	return fmt.Sprintf("github.com/goplus/%s", modPath)
+}
+
 func defaultDepsForMatrix(matrix, hostOS, hostArch string) ([]module.Version, error) {
 	if matrix == "" {
 		return nil, nil
@@ -219,7 +226,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 			return nil, err
 		}
 		// TODO(MeteorsLiu): Support different code host sites
-		latestRepo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", main.Path))
+		latestRepo, err := vcs.NewRepo(sourceRepoPath(main.Path))
 		if err != nil {
 			return nil, err
 		}
@@ -327,7 +334,7 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 	var deps classfile.ModuleDeps
 
 	// TODO(MeteorsLiu): Support different code host sites.
-	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mod.Path))
+	repo, err := vcs.NewRepo(sourceRepoPath(mod.Path))
 	if err != nil {
 		return nil, err
 	}
