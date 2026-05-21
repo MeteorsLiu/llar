@@ -37,15 +37,12 @@ func cacheKey(version, matrix string) string {
 	return version + "-" + matrix
 }
 
-func buildVariant(matrix, glibcVersion string, toolchainIdentity ...string) string {
+func buildVariant(matrix string, identities ...string) string {
 	variant := matrix
-	if glibcVersion == "" {
-		variant = matrix
-	} else {
-		variant = matrix + "+glibc-" + glibcVersion
-	}
-	if len(toolchainIdentity) > 0 && toolchainIdentity[0] != "" {
-		variant += "+llvm-" + sanitizeVariant(toolchainIdentity[0])
+	for _, identity := range identities {
+		if identity != "" {
+			variant += "+" + sanitizeVariant(identity)
+		}
 	}
 	return variant
 }

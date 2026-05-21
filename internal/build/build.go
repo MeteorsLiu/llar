@@ -193,15 +193,6 @@ func isSourceLessOfficialPackage(modPath string) bool {
 	return modPath == "glibc"
 }
 
-func selectedGlibcVersion(targets []*modules.Module) string {
-	for _, target := range targets {
-		if target.Path == "glibc" {
-			return target.Version
-		}
-	}
-	return ""
-}
-
 func applyCommandPatch(req execbroker.Request, patch crosscompile.Patch) execbroker.Request {
 	if patch.Name != "" {
 		req.Name = patch.Name
@@ -287,7 +278,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	if len(targets) > 0 {
 		rootID = module.Version{Path: targets[0].Path, Version: targets[0].Version}
 	}
-	variant := buildVariant(b.matrix, selectedGlibcVersion(targets), cc.Identity())
+	variant := buildVariant(b.matrix, cc.Identity())
 
 	build := func(mod *modules.Module) (Result, error) {
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
