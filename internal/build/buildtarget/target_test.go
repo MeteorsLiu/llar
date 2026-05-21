@@ -22,6 +22,16 @@ func TestParseNoOSTarget(t *testing.T) {
 	}
 }
 
+func TestParseIgnoresMatrixOptions(t *testing.T) {
+	target, err := Parse("arm64-linux|zlibON")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if target.Arch != "arm64" || target.OS != "linux" {
+		t.Fatalf("target = %+v, want arch=arm64 os=linux", target)
+	}
+}
+
 func TestParseRejectsMalformedMatrix(t *testing.T) {
 	for _, matrix := range []string{"", "-linux", "arm64-", "arm64-linux-debug"} {
 		if _, err := Parse(matrix); err == nil {

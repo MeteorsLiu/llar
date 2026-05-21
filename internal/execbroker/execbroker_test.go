@@ -66,6 +66,30 @@ func TestCommandAppliesMiddlewareEnv(t *testing.T) {
 	}
 }
 
+func TestCommandEnvPassesCallerEnvToMiddleware(t *testing.T) {
+	restore := SetMiddleware(func(req Request) Request {
+		if got := envValue(req.Env, "LLAR_EXECBROKER_TEST_INPUT"); got != "caller" {
+			t.Fatalf("middleware env = %q, want caller", got)
+		}
+		req.Name = os.Args[0]
+		req.Args = []string{"-test.run=TestExecBrokerHelperProcess"}
+		req.Env = append(req.Env,
+			"LLAR_EXECBROKER_HELPER=1",
+			"LLAR_EXECBROKER_VALUE=broker",
+		)
+		return req
+	})
+	defer restore()
+
+	out, err := CommandEnv([]string{"LLAR_EXECBROKER_TEST_INPUT=caller"}, "llar-missing-command").Output()
+	if err != nil {
+		t.Fatalf("CommandEnv output: %v", err)
+	}
+	if got := string(out); got != "broker" {
+		t.Fatalf("output = %q, want broker", got)
+	}
+}
+
 func TestRequestIsCloned(t *testing.T) {
 	args := []string{"original"}
 	restore := SetMiddleware(func(req Request) Request {
@@ -81,6 +105,16 @@ func TestRequestIsCloned(t *testing.T) {
 	if got := strings.Join(cmd.Args, " "); got != "go version" {
 		t.Fatalf("cmd.Args = %q, want go version", got)
 	}
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix)
+		}
+	}
+	return ""
 }
 
 func TestExecBrokerHelperProcess(t *testing.T) {

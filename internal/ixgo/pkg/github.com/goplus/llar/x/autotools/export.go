@@ -19,6 +19,7 @@ func init() {
 			"os":            "os",
 			"path/filepath": "filepath",
 			"runtime":       "runtime",
+			"strings":       "strings",
 		},
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{

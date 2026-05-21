@@ -14,6 +14,7 @@ func Parse(matrix string) (Platform, error) {
 	if matrix == "" {
 		return Platform{}, fmt.Errorf("invalid matrix %q: empty", matrix)
 	}
+	matrix, _, _ = strings.Cut(matrix, "|")
 	parts := strings.Split(matrix, "-")
 	switch len(parts) {
 	case 1:

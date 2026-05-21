@@ -11,6 +11,7 @@ type Request struct {
 	Name string
 	Args []string
 	Env  []string
+	Dir  string
 }
 
 // Middleware may rewrite command name, arguments, or environment.
@@ -47,16 +48,21 @@ func SetMiddleware(next Middleware) func() {
 
 // Command is the brokered equivalent of exec.Command.
 func Command(name string, args ...string) *exec.Cmd {
-	req := rewrite(Request{Name: name, Args: clone(args)})
-	cmd := exec.Command(req.Name, req.Args...)
-	applyEnv(cmd, req.Env)
-	return cmd
+	return CommandEnv(nil, name, args...)
 }
 
 // CommandContext is the brokered equivalent of exec.CommandContext.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
 	req := rewrite(Request{Name: name, Args: clone(args)})
 	cmd := exec.CommandContext(ctx, req.Name, req.Args...)
+	applyEnv(cmd, req.Env)
+	return cmd
+}
+
+// CommandEnv is Command with an explicit environment visible to middleware.
+func CommandEnv(env []string, name string, args ...string) *exec.Cmd {
+	req := rewrite(Request{Name: name, Args: clone(args), Env: clone(env)})
+	cmd := exec.Command(req.Name, req.Args...)
 	applyEnv(cmd, req.Env)
 	return cmd
 }

@@ -169,6 +169,25 @@ func TestRunUsesExecBroker(t *testing.T) {
 	}
 }
 
+func TestRunSysrootSuppressesDefaultMiddlewareSysroot(t *testing.T) {
+	restore := execbroker.SetMiddleware(func(req execbroker.Request) execbroker.Request {
+		if got := envValue(req.Env, "LLAR_EXECBROKER_SYSROOT"); got != "--sysroot=/explicit" {
+			t.Fatalf("LLAR_EXECBROKER_SYSROOT = %q, want explicit sysroot", got)
+		}
+		req.Name = "go"
+		req.Args = []string{"version"}
+		req.Env = setEnv(req.Env, "CFLAGS", "--sysroot=/default")
+		return req
+	})
+	defer restore()
+
+	c := New("", "", "")
+	c.Sysroot("--sysroot=/explicit")
+	if err := c.run("llar-missing-command", nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
 func TestConfigureBuildInstallE2E(t *testing.T) {
 	if _, err := exec.LookPath("cmake"); err != nil {
 		t.Skip("cmake not found in PATH")

@@ -7,15 +7,21 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/build/buildtarget"
+	"github.com/goplus/llar/internal/build/crosscompile"
+	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
+
+const explicitSysrootEnv = "LLAR_EXECBROKER_SYSROOT"
 
 type Builder struct {
 	store        repo.Store
@@ -225,8 +231,143 @@ func selectedGlibcVersion(targets []*modules.Module) string {
 	return ""
 }
 
+func needsDefaultSysroot(matrix string) bool {
+	target, err := buildtarget.Parse(matrix)
+	if err != nil {
+		return false
+	}
+	host := buildtarget.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
+	return target.NeedsDefaultGlibc(host)
+}
+
+func applyCommandPatch(req execbroker.Request, patch crosscompile.Patch) execbroker.Request {
+	if patch.Name != "" {
+		req.Name = patch.Name
+	}
+	if len(patch.PrependArg) > 0 {
+		req.Args = append(append([]string(nil), patch.PrependArg...), req.Args...)
+	}
+	if len(patch.AppendArg) > 0 {
+		req.Args = append(req.Args, patch.AppendArg...)
+	}
+	if len(patch.PrependEnv) > 0 || len(patch.SetEnv) > 0 {
+		env := requestEnv(req.Env)
+		for key, values := range patch.PrependEnv {
+			for i := len(values) - 1; i >= 0; i-- {
+				env = setEnv(env, key, prependPathValue(envValue(env, key), values[i]))
+			}
+		}
+		for key, value := range patch.SetEnv {
+			env = setEnv(env, key, value)
+		}
+		req.Env = env
+	}
+	return req
+}
+
+func sysrootPatch(req execbroker.Request, metadata string) crosscompile.Patch {
+	if metadata == "" {
+		return crosscompile.Patch{}
+	}
+	base := filepath.Base(req.Name)
+	switch base {
+	case "cmake":
+		return flagsEnvPatch(req.Env, metadata, []string{"CFLAGS", "CXXFLAGS", "LDFLAGS"})
+	case "configure":
+		return flagsEnvPatch(req.Env, metadata, []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"})
+	case "cc", "gcc", "clang", "c++", "g++", "clang++":
+		return crosscompile.Patch{AppendArg: strings.Fields(metadata)}
+	}
+	if strings.HasSuffix(base, "configure") {
+		return flagsEnvPatch(req.Env, metadata, []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"})
+	}
+	return crosscompile.Patch{}
+}
+
+func flagsEnvPatch(env []string, metadata string, keys []string) crosscompile.Patch {
+	set := make(map[string]string, len(keys))
+	base := requestEnv(env)
+	for _, key := range keys {
+		set[key] = appendFlagValue(envValue(base, key), metadata)
+	}
+	return crosscompile.Patch{SetEnv: set}
+}
+
+func explicitSysroot(env []string) string {
+	return envValue(env, explicitSysrootEnv)
+}
+
+func stripSysrootSentinel(req execbroker.Request) execbroker.Request {
+	if len(req.Env) == 0 {
+		return req
+	}
+	req.Env = unsetEnv(req.Env, explicitSysrootEnv)
+	return req
+}
+
+func requestEnv(env []string) []string {
+	if env != nil {
+		return append([]string(nil), env...)
+	}
+	return os.Environ()
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix)
+		}
+	}
+	return ""
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i := range env {
+		if strings.HasPrefix(env[i], prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func unsetEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func appendFlagValue(current, flag string) string {
+	if current == "" {
+		return flag
+	}
+	return current + " " + flag
+}
+
+func prependPathValue(current, value string) string {
+	if current == "" {
+		return value
+	}
+	sep := ":"
+	if runtime.GOOS == "windows" {
+		sep = ";"
+	}
+	return value + sep + current
+}
+
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
+	cc, err := crosscompile.New(b.matrix)
+	if err != nil {
+		return nil, err
+	}
 
 	// Identify the root target. By MVS convention (see constructBuildList
 	// and modules.Load), targets[0] is the main module requested by the
@@ -242,7 +383,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	if len(targets) > 0 {
 		rootID = module.Version{Path: targets[0].Path, Version: targets[0].Version}
 	}
-	variant := buildVariant(b.matrix, selectedGlibcVersion(targets))
+	variant := buildVariant(b.matrix, selectedGlibcVersion(targets), cc.Identity())
 
 	build := func(mod *modules.Module) (Result, error) {
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
@@ -323,6 +464,27 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		if err := os.Chdir(tmpSourceDir); err != nil {
 			return Result{}, err
 		}
+
+		defaultSysroot, hasDefaultSysroot := defaultSysrootMetadata(targets, builtResults)
+		if needsDefaultSysroot(b.matrix) && mod.Path != "glibc" && !hasDefaultSysroot {
+			return Result{}, fmt.Errorf("cross-linux matrix %q selected glibc but no default sysroot metadata is available for %s@%s", b.matrix, mod.Path, mod.Version)
+		}
+		restoreMiddleware := execbroker.SetMiddleware(func(req execbroker.Request) execbroker.Request {
+			req = applyCommandPatch(req, cc.Use(crosscompile.Command{
+				Name: req.Name,
+				Args: req.Args,
+				Env:  req.Env,
+				Dir:  req.Dir,
+			}))
+			if sysroot := explicitSysroot(req.Env); sysroot != "" {
+				return stripSysrootSentinel(applyCommandPatch(req, sysrootPatch(req, sysroot)))
+			}
+			if hasDefaultSysroot {
+				return stripSysrootSentinel(applyCommandPatch(req, sysrootPatch(req, defaultSysroot)))
+			}
+			return stripSysrootSentinel(req)
+		})
+		defer restoreMiddleware()
 
 		// Run OnBuild only on cache miss; reuse cached metadata otherwise.
 		var metadata string

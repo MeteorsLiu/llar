@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/goplus/llar/internal/execbroker"
 )
@@ -23,6 +24,7 @@ type CMake struct {
 	generator  string
 	buildType  string
 	toolchain  string
+	sysroot    string
 	defines    map[string]defineValue
 }
 
@@ -47,6 +49,9 @@ func (c *CMake) BuildType(name string) { c.buildType = name }
 
 // Toolchain sets CMAKE_TOOLCHAIN_FILE.
 func (c *CMake) Toolchain(path string) { c.toolchain = path }
+
+// Sysroot overrides the build default sysroot metadata for this CMake instance.
+func (c *CMake) Sysroot(metadata string) { c.sysroot = metadata }
 
 // Define adds a -D<key>:STRING=<value> definition.
 func (c *CMake) Define(key, value string) {
@@ -158,7 +163,17 @@ func (c *CMake) OutputDir() string {
 }
 
 func (c *CMake) run(name string, args []string) error {
-	cmd := execbroker.Command(name, args...)
+	env := os.Environ()
+	if c.sysroot != "" {
+		env = setEnv(env, "LLAR_EXECBROKER_SYSROOT", c.sysroot)
+	}
+	cmd := execbroker.CommandEnv(env, name, args...)
+	if c.sysroot != "" {
+		cmd.Env = unsetEnv(cmd.Env, "LLAR_EXECBROKER_SYSROOT")
+		for _, key := range []string{"CFLAGS", "CXXFLAGS", "LDFLAGS"} {
+			cmd.Env = setEnv(cmd.Env, key, appendFlagValue(envValue(cmd.Env, key), c.sysroot))
+		}
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -199,4 +214,43 @@ func appendFlag(key, flag string) {
 		flag = cur + " " + flag
 	}
 	os.Setenv(key, flag)
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix)
+		}
+	}
+	return ""
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i := range env {
+		if strings.HasPrefix(env[i], prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func unsetEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func appendFlagValue(current, flag string) string {
+	if current == "" {
+		return flag
+	}
+	return current + " " + flag
 }

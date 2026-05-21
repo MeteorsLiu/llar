@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/goplus/llar/internal/execbroker"
 )
@@ -14,6 +15,7 @@ type AutoTools struct {
 	sourceDir  string
 	buildDir   string
 	installDir string
+	sysroot    string
 }
 
 // New returns a ready-to-use AutoTools.
@@ -27,6 +29,9 @@ func New(sourceDir, buildDir, installDir string) *AutoTools {
 
 // Source overrides the source directory.
 func (a *AutoTools) Source(dir string) { a.sourceDir = dir }
+
+// Sysroot overrides the build default sysroot metadata for this AutoTools instance.
+func (a *AutoTools) Sysroot(metadata string) { a.sysroot = metadata }
 
 // Use configures the process environment so that compilers and build tools
 // find headers, libraries and pkg-config files from a non-system dependency
@@ -109,7 +114,17 @@ func (a *AutoTools) workDir() string {
 }
 
 func (a *AutoTools) run(name string, args []string) error {
-	cmd := execbroker.Command(name, args...)
+	env := os.Environ()
+	if a.sysroot != "" {
+		env = setEnv(env, "LLAR_EXECBROKER_SYSROOT", a.sysroot)
+	}
+	cmd := execbroker.CommandEnv(env, name, args...)
+	if a.sysroot != "" {
+		cmd.Env = unsetEnv(cmd.Env, "LLAR_EXECBROKER_SYSROOT")
+		for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
+			cmd.Env = setEnv(cmd.Env, key, appendFlagValue(envValue(cmd.Env, key), a.sysroot))
+		}
+	}
 	cmd.Dir = a.workDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -134,4 +149,43 @@ func appendFlag(key, flag string) {
 		flag = cur + " " + flag
 	}
 	os.Setenv(key, flag)
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix)
+		}
+	}
+	return ""
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i := range env {
+		if strings.HasPrefix(env[i], prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func unsetEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func appendFlagValue(current, flag string) string {
+	if current == "" {
+		return flag
+	}
+	return current + " " + flag
 }

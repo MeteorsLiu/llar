@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/goplus/llar/mod/module"
@@ -36,11 +37,22 @@ func cacheKey(version, matrix string) string {
 	return version + "-" + matrix
 }
 
-func buildVariant(matrix, glibcVersion string) string {
+func buildVariant(matrix, glibcVersion string, toolchainIdentity ...string) string {
+	variant := matrix
 	if glibcVersion == "" {
-		return matrix
+		variant = matrix
+	} else {
+		variant = matrix + "+glibc-" + glibcVersion
 	}
-	return matrix + "+glibc-" + glibcVersion
+	if len(toolchainIdentity) > 0 && toolchainIdentity[0] != "" {
+		variant += "+llvm-" + sanitizeVariant(toolchainIdentity[0])
+	}
+	return variant
+}
+
+func sanitizeVariant(v string) string {
+	replacer := strings.NewReplacer("/", "-", ":", "-", "@", "-")
+	return replacer.Replace(v)
 }
 
 func (c *buildCache) get(version, matrix string) (*buildEntry, bool) {
