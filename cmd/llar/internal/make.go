@@ -132,6 +132,7 @@ func hostMatrixCombo() string {
 func buildModule(ctx context.Context, store repo.Store, modPath, version, matrixStr string, runTest bool) error {
 	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
 		FormulaStore: store,
+		MatrixStr:    matrixStr,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load modules: %w", err)
