@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/goplus/llar/internal/build/buildtarget"
 	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/mvs"
@@ -60,6 +62,47 @@ type Module struct {
 type Options struct {
 	// FormulaStore is the store for downloading and caching formulas.
 	FormulaStore repo.Store
+
+	// MatrixStr is the active target matrix. Empty means no platform default
+	// dependencies are injected.
+	MatrixStr string
+
+	// HostOS and HostArch are test seams. Production callers leave them empty
+	// and the runtime host is used.
+	HostOS   string
+	HostArch string
+}
+
+const defaultGlibcVersion = "2.39"
+
+func defaultDepsForMatrix(matrix, hostOS, hostArch string) ([]module.Version, error) {
+	if matrix == "" {
+		return nil, nil
+	}
+	if hostOS == "" {
+		hostOS = runtime.GOOS
+	}
+	if hostArch == "" {
+		hostArch = runtime.GOARCH
+	}
+	target, err := buildtarget.Parse(matrix)
+	if err != nil {
+		return nil, err
+	}
+	host := buildtarget.Platform{OS: hostOS, Arch: hostArch}
+	if !target.NeedsDefaultGlibc(host) {
+		return nil, nil
+	}
+	return []module.Version{{Path: "glibc", Version: defaultGlibcVersion}}, nil
+}
+
+func appendDefaultDeps(deps []module.Version, defaults []module.Version) []module.Version {
+	if len(defaults) == 0 {
+		return deps
+	}
+	out := append([]module.Version(nil), deps...)
+	out = append(out, defaults...)
+	return out
 }
 
 func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
@@ -194,6 +237,11 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	if err != nil {
 		return nil, err
 	}
+	defaultDeps, err := defaultDepsForMatrix(opts.MatrixStr, opts.HostOS, opts.HostArch)
+	if err != nil {
+		return nil, err
+	}
+	mainDeps = appendDefaultDeps(mainDeps, defaultDeps)
 	cmp := func(p, v1, v2 string) int {
 		// none is an internal version for MVS, which means the smallest
 		if v1 == "none" && v2 != "none" {

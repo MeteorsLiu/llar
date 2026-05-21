@@ -298,6 +298,89 @@ func TestLoad_SingleModuleNoDeps(t *testing.T) {
 	}
 }
 
+func TestLoad_CrossLinuxInjectsDefaultGlibc(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
+
+	mods, err := Load(ctx, main, Options{
+		FormulaStore: store,
+		MatrixStr:    "amd64-linux",
+		HostOS:       "darwin",
+		HostArch:     "arm64",
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	glibc := findModule(mods, "glibc")
+	if glibc == nil {
+		t.Fatalf("glibc not found in build list: %#v", mods)
+	}
+	if glibc.Version != "2.39" {
+		t.Fatalf("glibc version = %q, want 2.39", glibc.Version)
+	}
+	if mods[0].Path != "towner/standalone" {
+		t.Fatalf("mods[0].Path = %q, want root module", mods[0].Path)
+	}
+}
+
+func TestLoad_DefaultGlibcSkippedForNativeDarwinAndNoOS(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
+
+	tests := []struct {
+		name   string
+		matrix string
+	}{
+		{name: "native", matrix: "arm64-darwin"},
+		{name: "cross darwin", matrix: "amd64-darwin"},
+		{name: "no os", matrix: "arm64"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mods, err := Load(ctx, main, Options{
+				FormulaStore: store,
+				MatrixStr:    tt.matrix,
+				HostOS:       "darwin",
+				HostArch:     "arm64",
+			})
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			if glibc := findModule(mods, "glibc"); glibc != nil {
+				t.Fatalf("glibc unexpectedly found for %s: %+v", tt.matrix, glibc)
+			}
+		})
+	}
+}
+
+func TestLoad_ExplicitGlibcRequirementParticipatesInMVS(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/withglibc", Version: "1.0.0"}
+
+	mods, err := Load(ctx, main, Options{
+		FormulaStore: store,
+		MatrixStr:    "amd64-linux",
+		HostOS:       "darwin",
+		HostArch:     "arm64",
+	})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	glibc := findModule(mods, "glibc")
+	if glibc == nil {
+		t.Fatal("glibc not found")
+	}
+	if glibc.Version != "2.40" {
+		t.Fatalf("glibc version = %q, want explicit higher version 2.40", glibc.Version)
+	}
+}
+
 func TestLoad_ChainDeps(t *testing.T) {
 	store := setupTestStore(t, "testdata/load")
 	ctx := context.Background()

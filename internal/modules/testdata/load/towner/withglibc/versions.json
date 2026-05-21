@@ -1,0 +1,11 @@
+{
+	"path": "towner/withglibc",
+	"deps": {
+		"1.0.0": [
+			{
+				"path": "glibc",
+				"version": "2.40"
+			}
+		]
+	}
+}

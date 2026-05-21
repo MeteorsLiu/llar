@@ -1,0 +1,7 @@
+id "glibc"
+
+fromVer "2.40"
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "--sysroot=" + ctx.outputDir()
+}
