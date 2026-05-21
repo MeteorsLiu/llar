@@ -187,6 +187,10 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 	return order
 }
 
+func isSourceLessOfficialPackage(modPath string) bool {
+	return modPath == "glibc"
+}
+
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
 
@@ -247,15 +251,17 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer os.RemoveAll(tmpSourceDir)
 
-		// Before we start to build, clone source to tmpSourceDir
-		// And switch current dir to it.
-		// TODO(MeteorsLiu): Support different code host
-		repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
-		if err != nil {
-			return Result{}, err
-		}
-		if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
-			return Result{}, err
+		if !isSourceLessOfficialPackage(mod.Path) {
+			// Before we start to build, clone source to tmpSourceDir
+			// And switch current dir to it.
+			// TODO(MeteorsLiu): Support different code host
+			repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
+			if err != nil {
+				return Result{}, err
+			}
+			if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
+				return Result{}, err
+			}
 		}
 
 		installDir, err := b.installDir(mod.Path, mod.Version)

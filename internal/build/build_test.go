@@ -547,6 +547,37 @@ func TestBuild_CacheAccumulatesMultipleVersions(t *testing.T) {
 	}
 }
 
+func TestBuild_SourceLessGlibcDoesNotCloneGithubGlibc(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.newRepo = func(repoPath string) (vcs.Repo, error) {
+		if repoPath == "github.com/glibc" {
+			return nil, fmt.Errorf("unexpected source clone for %s", repoPath)
+		}
+		modPath := strings.TrimPrefix(repoPath, "github.com/")
+		return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
+	}
+
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, module.Version{Path: "glibc", Version: "2.39"}, modules.Options{
+		FormulaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("modules.Load: %v", err)
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if !strings.HasPrefix(results[0].Metadata, "--sysroot=") {
+		t.Fatalf("metadata = %q, want sysroot metadata", results[0].Metadata)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // OnTest (RunTest) behaviour tests
 // ---------------------------------------------------------------------------
