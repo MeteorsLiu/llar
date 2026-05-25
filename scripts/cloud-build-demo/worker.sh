@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: worker.sh <server-url> <job-id>" >&2
+  exit 2
+fi
+
+server_url="${1%/}"
+job_id="$2"
+
+signal_json="$(curl -fsS "${server_url}/workers/${job_id}/signal?timeout=300s")"
+command="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command"])' <<<"${signal_json}")"
+
+set +e
+output="$(bash -lc "${command}" 2>&1)"
+status=$?
+set -e
+
+if [[ ${status} -eq 0 ]]; then
+  event_type="status"
+  event_status="completed"
+  error=""
+else
+  event_type="status"
+  event_status="failed"
+  error="exit status ${status}"
+fi
+
+EVENT_TYPE="${event_type}" EVENT_STATUS="${event_status}" OUTPUT="${output}" ERROR="${error}" \
+SERVER_URL="${server_url}" JOB_ID="${job_id}" \
+python3 - <<'PY' | curl -fsS -X POST \
+  -H 'Content-Type: application/json' \
+  --data-binary @- \
+  "${SERVER_URL}/jobs/${JOB_ID}/events"
+import json
+import os
+
+print(json.dumps({
+    "type": os.environ["EVENT_TYPE"],
+    "status": os.environ["EVENT_STATUS"],
+    "output": os.environ["OUTPUT"],
+    "error": os.environ["ERROR"],
+}))
+PY

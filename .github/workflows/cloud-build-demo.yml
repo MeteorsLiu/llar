@@ -1,0 +1,29 @@
+name: Cloud Build Demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: Demo server URL
+        required: true
+        type: string
+      job_id:
+        description: Demo job ID
+        required: true
+        type: string
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Build llar
+        run: go build -ldflags="-checklinkname=0" -o ./llar ./cmd/llar
+      - name: Run demo worker
+        env:
+          SERVER_URL: ${{ inputs.server_url }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: ./scripts/cloud-build-demo/worker.sh "$SERVER_URL" "$JOB_ID"
