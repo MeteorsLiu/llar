@@ -22,12 +22,16 @@ Client -> Scheduler -> Edge Worker -> Object Storage
   the existing build order, submits each module build to the Scheduler, downloads
   artifacts, writes the local build cache, and prints the root metadata.
 - **Scheduler**: Owns the public API, artifact lookup, active-job dedupe,
-  queueing, Kubernetes worker startup, job state, and client WebSocket fanout.
-  It does not execute builds.
-- **Edge Worker**: A Kubernetes-started container that executes one build job.
-  It reuses the existing `modules.Load` and `build.Builder` flow, prepares
-  dependency artifacts in its workspace, builds the target, uploads the artifact,
-  and streams logs/status back to the Scheduler.
+  queueing, worker provisioning, job state, and client WebSocket fanout. It can
+  provision workers through GitHub Actions, Kubernetes, or a fallback provider,
+  but it does not execute builds and does not initiate network connections to
+  workers.
+- **Edge Worker**: A provider-started container or runner that executes one
+  build job. It starts with Scheduler connection credentials, opens an outbound
+  control-plane WebSocket to the Scheduler, receives the job assignment, reuses
+  the existing `modules.Load` and `build.Builder` flow, prepares dependency
+  artifacts in its workspace, builds the target, uploads the artifact, and
+  streams logs/status back to the Scheduler.
 - **Object Storage**: Stores artifact archives. Clients and workers download
   archives from object storage URLs; workers upload completed archives.
 
@@ -142,7 +146,7 @@ artifact missing, active job exists:
   return pending + existing jobID
 
 artifact missing, no active job:
-  create JobRecord, enqueue it, start/assign an Edge Worker, return pending + new jobID
+  create JobRecord, enqueue it, provision an Edge Worker, return pending + new jobID
 ```
 
 The internal artifact key is:
@@ -239,13 +243,36 @@ status value uses HTTP status code semantics.
 
 ## Worker Control Plane
 
-The Scheduler owns the queue and starts Edge Worker containers through the
-Kubernetes API. The Edge Worker is a one-job build executor.
+The Scheduler owns the queue and provisions Edge Workers. The Edge Worker is a
+one-job build executor.
 
-The Scheduler connects to the Edge Worker over WebSocket after the worker pod is
-ready. The exact worker URL is an internal deployment detail.
+Workers are not public HTTP/WebSocket servers. The network direction is always:
 
-Scheduler-to-worker job message:
+```text
+Edge Worker -> Scheduler
+```
+
+When the Scheduler decides to run a queued job, it creates a worker token scoped
+to that job and starts a worker through the selected provider:
+
+```text
+GitHub Actions workflow_dispatch: scheduler URL + worker token as inputs
+Kubernetes Job/Pod: scheduler URL + worker token as environment variables
+Fallback provider: equivalent one-job launch metadata
+```
+
+The worker starts, opens an authenticated outbound WebSocket to the Scheduler,
+and waits for the job assignment:
+
+```text
+GET /v1/workers/ws
+```
+
+This is an internal control-plane endpoint. The exact URL can change, but the
+direction must not: workers connect to the Scheduler, not the other way around.
+
+After authenticating the worker token, the Scheduler binds the connection to the
+queued job and sends one job message:
 
 ```go
 type WorkerJobMessage struct {
@@ -258,7 +285,8 @@ type WorkerJobMessage struct {
 ```
 
 Worker-to-Scheduler log/status messages include `jobID` because worker
-connections are internal control-plane connections.
+connections are internal control-plane connections, and future worker providers
+may include additional provider-level routing outside this protocol.
 
 ```go
 type WorkerLogMessage struct {
@@ -277,8 +305,14 @@ type WorkerStatusMessage struct {
 
 The Scheduler stores worker logs and forwards them only to verbose client
 subscribers. Worker terminal status updates the job record, updates the artifact
-metadata on success, fans out terminal status to clients, and triggers worker
-cleanup.
+metadata on success, fans out terminal status to clients, closes the worker
+connection, and triggers provider cleanup when needed.
+
+If a provisioned worker never connects or disconnects before a terminal status,
+the Scheduler keeps the original `jobID`, marks the attempt failed internally,
+and may provision a replacement worker for the same job record. Client
+subscribers continue waiting on the same client WebSocket until the job reaches
+`completed` or `failed`.
 
 ## Client Install Flow
 
@@ -311,21 +345,23 @@ independent modules concurrently without changing the public job API.
 Each Edge Worker job builds one target.
 
 ```text
-1. Receive WorkerJobMessage from the Scheduler.
-2. Run modules.Load(target, MatrixStr) using the service-side latest llarhub.
-3. Find the main target in the returned build list.
-4. For each dependency in main.Deps:
+1. Start with Scheduler URL and worker token from the worker provider.
+2. Open the outbound worker WebSocket to the Scheduler.
+3. Receive `WorkerJobMessage` from the Scheduler.
+4. Run modules.Load(target, MatrixStr) using the service-side latest llarhub.
+5. Find the main target in the returned build list.
+6. For each dependency in main.Deps:
    a. Require its artifact to exist in the artifact store.
    b. Download it into the worker workspace installDir.
    c. Write dependency cache metadata using the existing build cache format.
-5. Run the existing build path:
+7. Run the existing build path:
    build.NewBuilder(build.Options{MatrixStr: MatrixStr, WorkspaceDir: workerWorkspace})
    builder.Build(ctx, mods)
-6. Select the main result exactly as llar make does:
+8. Select the main result exactly as llar make does:
    main := results[len(results)-1]
-7. Package main.OutputDir contents as an artifact archive.
-8. Upload the archive to object storage.
-9. Report completed with Artifact{URL, Type, Metadata: main.Metadata, Checksum}.
+9. Package main.OutputDir contents as an artifact archive.
+10. Upload the archive to object storage.
+11. Report completed with Artifact{URL, Type, Metadata: main.Metadata, Checksum}.
 ```
 
 The artifact archive contains the install directory contents only:
@@ -353,12 +389,14 @@ calls, artifact expiry, and race conditions.
 - Do not add `sourceHash`, `formulaHash`, or lock-file based reproducibility in
   this design.
 - Do not make Edge Workers public API servers. Workers are internal build
-  executors controlled by the Scheduler.
+  executors that call back to the Scheduler over outbound connections.
 
 ## Open Questions
 
-- Exact Kubernetes resource model: Job vs Pod, service discovery, worker
-  readiness, timeout, and cleanup.
+- Exact worker provider priority and fallback policy: GitHub Actions first,
+  Kubernetes capacity, or other providers.
+- Exact Kubernetes resource model: Job vs Pod, timeout, and cleanup.
+- Worker token format, lifetime, rotation, and retry behavior.
 - Object storage upload mechanism and URL lifetime.
 - Worker authentication with the Scheduler and object storage.
 - Client authentication with the Scheduler.
