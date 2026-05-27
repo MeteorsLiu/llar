@@ -26,12 +26,12 @@ Client -> Scheduler -> Edge Worker -> Object Storage
   provision workers through GitHub Actions, Kubernetes, or a fallback provider,
   but it does not execute builds and does not initiate network connections to
   workers.
-- **Edge Worker**: A provider-started container or runner that executes one
-  build job. It starts with Scheduler connection credentials, opens an outbound
-  control-plane WebSocket to the Scheduler, receives the job assignment, reuses
-  the existing `modules.Load` and `build.Builder` flow, prepares dependency
-  artifacts in its workspace, builds the target, uploads the artifact, and
-  streams logs/status back to the Scheduler.
+- **Edge Worker**: A provider-started `llar-edge-worker` process that executes
+  one build job. It starts with Scheduler connection credentials, opens an
+  outbound control-plane WebSocket to the Scheduler, receives the job
+  assignment, prepares dependency artifacts in its workspace, coordinates
+  `llar make` as the build command, uploads the artifact, and streams logs/status
+  back to the Scheduler.
 - **Object Storage**: Stores artifact archives. Clients and workers download
   archives from object storage URLs; workers upload completed archives.
 
@@ -40,7 +40,7 @@ Client -> Scheduler -> Edge Worker -> Object Storage
 `llar make` is the build command.
 
 - It can still be used locally.
-- The Edge Worker uses the same build path or equivalent shared code.
+- The Edge Worker invokes `llar make` in a controlled workspace.
 - Existing build cache, workspace layout, and result selection are preserved.
 
 `llar install` is the cloud artifact command.
@@ -158,6 +158,90 @@ type ArtifactKey struct {
 	MatrixStr string
 }
 ```
+
+`ArtifactKey.String()` uses the internal form:
+
+```text
+<module>@<version>#<matrixStr>
+```
+
+This string is used for Redis artifact state keys and Asynq task IDs. It is an
+internal representation; the public API still accepts structured target and
+matrix fields.
+
+## Redis and Asynq Dedupe
+
+Redis is used for build-state dedupe, not as an artifact metadata cache. It does
+not store artifact URL, type, metadata, or checksum. The artifact database
+remains the source of truth for completed artifact metadata.
+
+For each artifact key, the Scheduler maintains a Redis state key:
+
+```text
+artifact:state:<ArtifactKey.String()> = building(jobID) | completed
+```
+
+State meaning:
+
+```text
+building
+  A job is already building this artifact key. Repeated submit requests return
+  pending + jobID without creating another job.
+
+completed
+  This artifact key was recently completed. Submit requests query the artifact
+  database and return ready + artifact when the database record exists.
+
+missing Redis key
+  Redis has no current state for this artifact key. The Scheduler queries the
+  artifact database. If the artifact exists, it restores completed state in
+  Redis and returns ready. If it does not exist, it creates a new job.
+```
+
+The `building` state uses a short TTL tied to the maximum build/attempt timeout
+so crashed workers cannot block a key forever. The `completed` state uses a long
+TTL and may rely on Redis eviction policy to let cold artifact keys disappear.
+
+Completed Redis state is written only after the Scheduler has successfully
+recorded the artifact in the artifact database. If a completed Redis state is
+found but the artifact database has no matching artifact, the Scheduler treats
+the Redis state as stale, deletes it, and continues through normal job creation.
+
+Asynq is used as the lightweight Redis-backed queue for worker provisioning
+tasks. Provision tasks use `ArtifactKey.String()` as their Asynq task ID, so the
+queue also dedupes repeated provisioning for the same artifact key. Asynq task
+state is not job state: a successful Asynq task only means a worker was
+provisioned, not that the build completed.
+
+## Artifact Store Abstraction
+
+The design does not choose a concrete object storage backend or upload
+mechanism. S3-compatible storage, GitHub Releases, GitHub Packages, local
+storage, and future backends are implementation choices behind an internal
+artifact store abstraction.
+
+The public API only exposes completed artifacts as `Artifact{URL, Type,
+Metadata, Checksum}`. Clients download from `Artifact.URL`; they do not know how
+the artifact was uploaded or which backend produced the URL.
+
+The Scheduler uses the artifact store abstraction for artifact lookup and for
+publishing completed artifact metadata. The Edge Worker uses provider-specific
+upload capability supplied through that abstraction. The upload path may be a
+direct object-storage upload, a Scheduler-mediated upload, a GitHub Release
+asset upload, or another backend-specific mechanism.
+
+Those storage details must not leak into the public job protocol. For cloud
+build orchestration, the only stable contract is:
+
+```text
+artifact key -> maybe completed Artifact
+completed build output -> completed Artifact
+```
+
+`Artifact.URL` must be usable by clients when `POST /v1/jobs` returns
+`status=ready` or when a job WebSocket reports `completed`. URL lifetime,
+refresh, redirect, upload method, and backend-specific headers are artifact
+store implementation details.
 
 ### Client Job WebSocket
 
@@ -340,28 +424,34 @@ The client does not submit dependency metadata or BuildList to the Scheduler.
 It schedules modules one at a time in build order. Future concurrency can submit
 independent modules concurrently without changing the public job API.
 
-## Edge Worker Build Flow
+## Edge Worker Runtime
 
-Each Edge Worker job builds one target.
+`llar-edge-worker` is a separate program from the user-facing `llar` CLI. It
+owns Scheduler connectivity and cloud coordination. `llar make` remains a
+protocol-free local build command and must not know about Scheduler URLs,
+worker tokens, job IDs, WebSockets, provider selection, or artifact publishing.
+
+Each `llar-edge-worker` process executes one target.
 
 ```text
 1. Start with Scheduler URL and worker token from the worker provider.
 2. Open the outbound worker WebSocket to the Scheduler.
 3. Receive `WorkerJobMessage` from the Scheduler.
-4. Run modules.Load(target, MatrixStr) using the service-side latest llarhub.
-5. Find the main target in the returned build list.
-6. For each dependency in main.Deps:
+4. Prepare an isolated workspace.
+5. Resolve the target enough to identify direct dependency artifacts required by
+   this build.
+6. For each required dependency artifact:
    a. Require its artifact to exist in the artifact store.
    b. Download it into the worker workspace installDir.
    c. Write dependency cache metadata using the existing build cache format.
-7. Run the existing build path:
-   build.NewBuilder(build.Options{MatrixStr: MatrixStr, WorkspaceDir: workerWorkspace})
-   builder.Build(ctx, mods)
-8. Select the main result exactly as llar make does:
-   main := results[len(results)-1]
-9. Package main.OutputDir contents as an artifact archive.
-10. Upload the archive to object storage.
-11. Report completed with Artifact{URL, Type, Metadata: main.Metadata, Checksum}.
+7. Execute `llar make -v <module>@<version>` with the assigned matrix and
+   workspace.
+8. Stream child process stdout/stderr to the Scheduler as worker log messages.
+9. If `llar make` exits non-zero, report failed with the mapped status/message.
+10. If `llar make` succeeds, locate the target installDir in the workspace.
+11. Package installDir contents as an artifact archive.
+12. Upload the archive through the artifact store abstraction.
+13. Report completed with Artifact{URL, Type, Metadata, Checksum}.
 ```
 
 The artifact archive contains the install directory contents only:
@@ -386,6 +476,8 @@ calls, artifact expiry, and race conditions.
 - Do not change `modules.Load` semantics.
 - Do not change `build.Builder` ordering, cache-hit behavior, or result
   selection.
+- Do not put Scheduler protocol, worker token handling, WebSocket handling, or
+  artifact publishing into `llar make`.
 - Do not add `sourceHash`, `formulaHash`, or lock-file based reproducibility in
   this design.
 - Do not make Edge Workers public API servers. Workers are internal build
@@ -397,7 +489,6 @@ calls, artifact expiry, and race conditions.
   Kubernetes capacity, or other providers.
 - Exact Kubernetes resource model: Job vs Pod, timeout, and cleanup.
 - Worker token format, lifetime, rotation, and retry behavior.
-- Object storage upload mechanism and URL lifetime.
 - Worker authentication with the Scheduler and object storage.
 - Client authentication with the Scheduler.
 - Artifact retention, eviction, and metadata persistence.
