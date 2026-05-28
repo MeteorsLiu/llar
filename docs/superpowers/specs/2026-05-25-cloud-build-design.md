@@ -358,9 +358,10 @@ This is an internal control-plane endpoint. The exact URL can change, but the
 direction must not: workers connect to the Scheduler, not the other way around.
 
 After authenticating the worker ID/token, the Scheduler records the worker as
-connected. The worker registers its static capacity and periodically sends
-resource heartbeats. The Scheduler may send job messages while the worker is
-eligible to accept work.
+connected. The worker registers static resource facts and periodically sends
+resource heartbeats. The Scheduler owns concurrency and lifecycle limits; workers
+do not choose their own limits. The Scheduler may send job messages while the
+worker is eligible to accept work.
 
 ```go
 type WorkerJobMessage struct {
@@ -377,12 +378,11 @@ connection may carry multiple jobs.
 
 ```go
 type WorkerRegisterMessage struct {
-	Type           string `json:"type"` // register
-	WorkerID       string `json:"workerID"`
-	MaxConcurrency int    `json:"maxConcurrency"`
-	MaxJobs        int    `json:"maxJobs"`
-	OS             string `json:"os,omitempty"`
-	Arch           string `json:"arch,omitempty"`
+	Type        string          `json:"type"` // register
+	WorkerID    string          `json:"workerID"`
+	Resources   WorkerResources `json:"resources"`
+	OS          string          `json:"os,omitempty"`
+	Arch        string          `json:"arch,omitempty"`
 }
 
 type WorkerHeartbeatMessage struct {
@@ -394,7 +394,9 @@ type WorkerHeartbeatMessage struct {
 
 type WorkerResources struct {
 	CPUUsage    float64 `json:"cpuUsage,omitempty"`    // 0.0-1.0
+	CPUCores    int     `json:"cpuCores,omitempty"`
 	MemoryUsage float64 `json:"memoryUsage,omitempty"` // 0.0-1.0
+	MemoryTotal int64   `json:"memoryTotal,omitempty"`
 	DiskUsage   float64 `json:"diskUsage,omitempty"`   // 0.0-1.0
 }
 
@@ -422,12 +424,12 @@ Worker reuse policy:
 
 ```text
 maxConcurrency
-  The worker may run at most this many jobs concurrently. It is bounded by CPU
-  cores and resource headroom.
+  Scheduler-controlled. A worker may run at most this many jobs concurrently.
+  It is bounded by CPU cores and resource headroom.
 
 maxJobs
-  The worker may execute at most this many jobs over its lifetime. The default
-  cap is min(cpu cores, 4).
+  Scheduler-controlled. A worker may execute at most this many jobs over its
+  lifetime. The default cap is min(cpu cores, 4).
 
 busy-only reuse
   A worker may receive a new job only while it already has at least one running
@@ -483,14 +485,14 @@ protocol-free local build command and must not know about Scheduler URLs,
 worker tokens, job IDs, WebSockets, provider selection, or artifact publishing.
 
 Each `llar-edge-worker` process can execute multiple independent targets within
-its lifetime, subject to `maxConcurrency`, `maxJobs`, and the busy-only reuse
-policy. The initial implementation may set `maxConcurrency=1`, but the protocol
-does not require one worker per job.
+its lifetime, subject to Scheduler-controlled `maxConcurrency`, `maxJobs`, and
+the busy-only reuse policy. The initial implementation may set
+`maxConcurrency=1`, but the protocol does not require one worker per job.
 
 ```text
 1. Start with Scheduler URL, worker ID, and worker token from the worker provider.
 2. Open the outbound worker WebSocket to the Scheduler.
-3. Register worker capacity and resource capabilities.
+3. Register worker resource facts.
 4. Receive `WorkerJobMessage` from the Scheduler.
 5. Prepare an isolated per-job workspace.
 6. Resolve the target enough to identify direct dependency artifacts required by
