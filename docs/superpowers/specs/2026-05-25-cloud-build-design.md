@@ -27,7 +27,7 @@ Client -> Scheduler -> Edge Worker -> Object Storage
   but it does not execute builds and does not initiate network connections to
   workers.
 - **Edge Worker**: A provider-started `llar-edge-worker` process that executes
-  one build job. It starts with Scheduler connection credentials, opens an
+  build jobs. It starts with Scheduler connection credentials, opens an
   outbound control-plane WebSocket to the Scheduler, receives the job
   assignment, prepares dependency artifacts in its workspace, coordinates
   `llar make` as the build command, uploads the artifact, and streams logs/status
@@ -327,8 +327,9 @@ status value uses HTTP status code semantics.
 
 ## Worker Control Plane
 
-The Scheduler owns the queue and provisions Edge Workers. The Edge Worker is a
-one-job build executor.
+The Scheduler owns the queue and provisions Edge Workers. The Edge Worker is an
+execution agent. A worker may execute multiple independent jobs over its
+lifetime, but it is not a long-lived worker pool member.
 
 Workers are not public HTTP/WebSocket servers. The network direction is always:
 
@@ -336,13 +337,14 @@ Workers are not public HTTP/WebSocket servers. The network direction is always:
 Edge Worker -> Scheduler
 ```
 
-When the Scheduler decides to run a queued job, it creates a worker token scoped
-to that job and starts a worker through the selected provider:
+When the Scheduler decides to run a queued job and has no suitable active worker,
+it creates a worker identity and token, then starts a worker through the selected
+provider:
 
 ```text
-GitHub Actions workflow_dispatch: scheduler URL + worker token as inputs
-Kubernetes Job/Pod: scheduler URL + worker token as environment variables
-Fallback provider: equivalent one-job launch metadata
+GitHub Actions workflow_dispatch: scheduler URL + worker ID + worker token as inputs
+Kubernetes Job/Pod: scheduler URL + worker ID + worker token as environment variables
+Fallback provider: equivalent worker launch metadata
 ```
 
 The worker starts, opens an authenticated outbound WebSocket to the Scheduler,
@@ -355,8 +357,10 @@ GET /v1/workers/ws
 This is an internal control-plane endpoint. The exact URL can change, but the
 direction must not: workers connect to the Scheduler, not the other way around.
 
-After authenticating the worker token, the Scheduler binds the connection to the
-queued job and sends one job message:
+After authenticating the worker ID/token, the Scheduler records the worker as
+connected. The worker registers its static capacity and periodically sends
+resource heartbeats. The Scheduler may send job messages while the worker is
+eligible to accept work.
 
 ```go
 type WorkerJobMessage struct {
@@ -368,11 +372,32 @@ type WorkerJobMessage struct {
 }
 ```
 
-Worker-to-Scheduler log/status messages include `jobID` because worker
-connections are internal control-plane connections, and future worker providers
-may include additional provider-level routing outside this protocol.
+Worker-to-Scheduler log/status messages include `jobID` because one worker
+connection may carry multiple jobs.
 
 ```go
+type WorkerRegisterMessage struct {
+	Type           string `json:"type"` // register
+	WorkerID       string `json:"workerID"`
+	MaxConcurrency int    `json:"maxConcurrency"`
+	MaxJobs        int    `json:"maxJobs"`
+	OS             string `json:"os,omitempty"`
+	Arch           string `json:"arch,omitempty"`
+}
+
+type WorkerHeartbeatMessage struct {
+	Type        string          `json:"type"` // heartbeat
+	WorkerID    string          `json:"workerID"`
+	RunningJobs int             `json:"runningJobs"`
+	Resources   WorkerResources `json:"resources"`
+}
+
+type WorkerResources struct {
+	CPUUsage    float64 `json:"cpuUsage,omitempty"`    // 0.0-1.0
+	MemoryUsage float64 `json:"memoryUsage,omitempty"` // 0.0-1.0
+	DiskUsage   float64 `json:"diskUsage,omitempty"`   // 0.0-1.0
+}
+
 type WorkerLogMessage struct {
 	Type  string  `json:"type"` // log
 	JobID string  `json:"jobID"`
@@ -390,12 +415,38 @@ type WorkerStatusMessage struct {
 The Scheduler stores worker logs and forwards them only to verbose client
 subscribers. Worker terminal status updates the job record, updates the artifact
 metadata on success, fans out terminal status to clients, closes the worker
-connection, and triggers provider cleanup when needed.
+connection when the worker has no more running jobs, and triggers provider
+cleanup when needed.
 
-If a provisioned worker never connects or disconnects before a terminal status,
-the Scheduler keeps the original `jobID`, marks the attempt failed internally,
-and may provision a replacement worker for the same job record. Client
-subscribers continue waiting on the same client WebSocket until the job reaches
+Worker reuse policy:
+
+```text
+maxConcurrency
+  The worker may run at most this many jobs concurrently. It is bounded by CPU
+  cores and resource headroom.
+
+maxJobs
+  The worker may execute at most this many jobs over its lifetime. The default
+  cap is min(cpu cores, 4).
+
+busy-only reuse
+  A worker may receive a new job only while it already has at least one running
+  job. If the worker has no running jobs, it must stop accepting work and be
+  destroyed instead of waiting for future jobs.
+
+independent jobs only
+  Concurrent jobs on the same worker must be independent. The Scheduler must not
+  assign jobs with dependency relationships to the same worker at the same time.
+```
+
+Every job assigned to a worker uses its own workspace and cache root. Completed
+job workspaces are cleaned before the worker exits. This preserves `llar`
+isolation even when a worker executes more than one job.
+
+If a provisioned worker never connects or disconnects before terminal status for
+its assigned jobs, the Scheduler keeps the original job IDs, treats affected
+worker assignments as lost, and may provision replacement workers. Client
+subscribers continue waiting on the same client WebSocket until each job reaches
 `completed` or `failed`.
 
 ## Client Install Flow
@@ -431,27 +482,32 @@ owns Scheduler connectivity and cloud coordination. `llar make` remains a
 protocol-free local build command and must not know about Scheduler URLs,
 worker tokens, job IDs, WebSockets, provider selection, or artifact publishing.
 
-Each `llar-edge-worker` process executes one target.
+Each `llar-edge-worker` process can execute multiple independent targets within
+its lifetime, subject to `maxConcurrency`, `maxJobs`, and the busy-only reuse
+policy. The initial implementation may set `maxConcurrency=1`, but the protocol
+does not require one worker per job.
 
 ```text
-1. Start with Scheduler URL and worker token from the worker provider.
+1. Start with Scheduler URL, worker ID, and worker token from the worker provider.
 2. Open the outbound worker WebSocket to the Scheduler.
-3. Receive `WorkerJobMessage` from the Scheduler.
-4. Prepare an isolated workspace.
-5. Resolve the target enough to identify direct dependency artifacts required by
+3. Register worker capacity and resource capabilities.
+4. Receive `WorkerJobMessage` from the Scheduler.
+5. Prepare an isolated per-job workspace.
+6. Resolve the target enough to identify direct dependency artifacts required by
    this build.
-6. For each required dependency artifact:
+7. For each required dependency artifact:
    a. Require its artifact to exist in the artifact store.
    b. Download it into the worker workspace installDir.
    c. Write dependency cache metadata using the existing build cache format.
-7. Execute `llar make -v <module>@<version>` with the assigned matrix and
+8. Execute `llar make -v <module>@<version>` with the assigned matrix and
    workspace.
-8. Stream child process stdout/stderr to the Scheduler as worker log messages.
-9. If `llar make` exits non-zero, report failed with the mapped status/message.
-10. If `llar make` succeeds, locate the target installDir in the workspace.
-11. Package installDir contents as an artifact archive.
-12. Upload the archive through the artifact store abstraction.
-13. Report completed with Artifact{URL, Type, Metadata, Checksum}.
+9. Stream child process stdout/stderr to the Scheduler as worker log messages.
+10. If `llar make` exits non-zero, report failed with the mapped status/message.
+11. If `llar make` succeeds, locate the target installDir in the workspace.
+12. Package installDir contents as an artifact archive.
+13. Upload the archive through the artifact store abstraction.
+14. Report completed with Artifact{URL, Type, Metadata, Checksum}.
+15. If no jobs remain running, stop accepting new work and exit.
 ```
 
 The artifact archive contains the install directory contents only:
