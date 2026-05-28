@@ -139,14 +139,21 @@ status=pending -> jobID required
 Scheduler behavior:
 
 ```text
-artifact exists:
-  return ready + artifact
-
-artifact missing, active job exists:
-  return pending + existing jobID
-
-artifact missing, no active job:
-  create JobRecord, enqueue it, provision an Edge Worker, return pending + new jobID
+1. Convert the request target + matrix into ArtifactKey.
+2. Read Redis artifact state.
+3. If Redis state is building(jobID):
+   return pending + jobID.
+4. If Redis state is completed:
+   read artifacts by ArtifactKey.
+   if artifact exists, return ready + artifact.
+   if artifact is missing, delete the stale Redis state and continue.
+5. If Redis state is missing:
+   read artifacts by ArtifactKey.
+   if artifact exists, write Redis completed and return ready + artifact.
+6. Create or reuse a pending job for ArtifactKey.
+7. Write Redis building(jobID).
+8. Enqueue the Asynq provisioning task with TaskID=ArtifactKey.String().
+9. Return pending + jobID.
 ```
 
 The internal artifact key is:
@@ -212,6 +219,135 @@ tasks. Provision tasks use `ArtifactKey.String()` as their Asynq task ID, so the
 queue also dedupes repeated provisioning for the same artifact key. Asynq task
 state is not job state: a successful Asynq task only means a worker was
 provisioned, not that the build completed.
+
+## Persistent State
+
+Persistent state exists to recover client job waits, worker reconnects, and
+completed artifacts across Scheduler restart. Redis and Asynq are fast-path
+coordination tools, not the only source of truth.
+
+### Artifacts Table
+
+`artifacts` stores completed artifact metadata. It is queried by
+`module/version/matrix_str`.
+
+```sql
+CREATE TABLE artifacts (
+  module      TEXT NOT NULL,
+  version     TEXT NOT NULL,
+  matrix_str  TEXT NOT NULL,
+
+  url         TEXT NOT NULL,
+  type        TEXT NOT NULL,
+  metadata    TEXT NOT NULL,
+  checksum    TEXT NOT NULL,
+
+  created_at  TIMESTAMP NOT NULL,
+  expires_at  TIMESTAMP NULL,
+
+  PRIMARY KEY (module, version, matrix_str)
+);
+```
+
+Artifact rows are immutable for a given primary key. When a worker submits a
+completed artifact:
+
+```text
+missing row:
+  insert artifact
+
+existing row with same checksum:
+  treat as idempotent success
+
+existing row with different checksum:
+  fail the job with 409 Conflict and do not overwrite the artifact
+```
+
+If the same module/version/matrix produces a different checksum, the package
+should publish a new version instead of replacing the old artifact.
+
+### Jobs Table
+
+`jobs` stores the client-visible build request. `job_id` is the client's
+recovery handle for `/v1/jobs/{jobID}/ws`.
+
+```sql
+CREATE TABLE jobs (
+  job_id             TEXT PRIMARY KEY,
+
+  module             TEXT NOT NULL,
+  version            TEXT NOT NULL,
+  matrix_str         TEXT NOT NULL,
+
+  current_worker_id  TEXT NULL,
+  state              TEXT NOT NULL, -- pending | completed | failed
+
+  error_status       INTEGER NULL,
+  error_message      TEXT NULL,
+
+  created_at         TIMESTAMP NOT NULL,
+  finished_at        TIMESTAMP NULL
+);
+```
+
+`jobs.current_worker_id` points to the worker currently responsible for the job.
+It is used to validate worker log/status messages and to recover client
+subscriptions after reconnect. A job only accepts terminal status from its
+current worker.
+
+At most one pending job may exist for the same `module/version/matrix_str` at a
+time. The Scheduler should enforce this with a transaction or a partial unique
+index on pending jobs. Historical completed/failed jobs may remain for
+diagnostics.
+
+### Workers Table
+
+`workers` stores Scheduler-created worker identities. Provider IDs are external
+provider handles, not Scheduler identities.
+
+```sql
+CREATE TABLE workers (
+  worker_id        TEXT PRIMARY KEY,
+
+  state            TEXT NOT NULL, -- created | connected | reconnecting | closed
+
+  provider         TEXT NOT NULL,
+  provider_id      TEXT NULL,
+
+  token_hash       TEXT NOT NULL,
+
+  created_at       TIMESTAMP NOT NULL,
+  connected_at     TIMESTAMP NULL,
+  disconnected_at  TIMESTAMP NULL,
+  closed_at        TIMESTAMP NULL
+);
+```
+
+`worker_id` is the Scheduler identity used for worker WebSocket registration and
+job assignment. `provider_id` is the external ID returned by the provider, such
+as a GitHub Actions run ID, Kubernetes job/pod name, or VM instance ID.
+
+Worker reconnect validation uses `worker_id + token`, `state`, and
+`disconnected_at`:
+
+```text
+state=connected:
+  worker has an active Scheduler WebSocket
+
+state=reconnecting:
+  worker disconnected; it may reconnect if now - disconnected_at <= 150 seconds
+
+state=closed:
+  worker is no longer accepted; later reconnects or results are rejected
+```
+
+Jobs assigned to a worker are found through:
+
+```sql
+SELECT job_id FROM jobs
+WHERE current_worker_id = ?
+  AND state = 'pending';
+```
 
 ## Artifact Store Abstraction
 
