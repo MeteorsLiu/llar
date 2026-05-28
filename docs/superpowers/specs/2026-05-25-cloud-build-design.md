@@ -292,6 +292,41 @@ The WebSocket does not send progress. Without verbose logs, the client waits
 for `completed` or `failed`. After sending a terminal status, the Scheduler
 closes the connection.
 
+### Job Log Window
+
+Worker logs are required for diagnostics, but log volume must not compete with
+Redis queue/dedupe traffic in the initial design. The Scheduler keeps a
+best-effort in-memory log window per job.
+
+Default behavior:
+
+```text
+capacity
+  1024 log fragments per job.
+
+append
+  Each worker log fragment is appended to the job's in-memory ring buffer.
+
+eviction
+  When the ring is full, the oldest fragments are dropped.
+
+verbose reconnect
+  A verbose client connection replays the current ring buffer before receiving
+  live log fragments.
+
+non-verbose
+  Non-verbose clients do not receive log fragments.
+```
+
+The log window is not a source of truth. It may be lost on Scheduler restart and
+is not required for job recovery. Completed/failed job status and artifacts are
+recovered from persistent state; logs are diagnostic only.
+
+The storage behind this log window should remain replaceable. Future
+implementations may move the same sliding-window semantics to Redis List,
+Redis Stream, or a dedicated log backend without changing the client WebSocket
+message shapes.
+
 ### HTTP Errors
 
 Synchronous API errors use HTTP status codes and a simple body:
