@@ -14,11 +14,17 @@ func TestWorkerReceivesSignal(t *testing.T) {
 	server := httptest.NewServer(app.routes())
 	defer server.Close()
 
-	jobID := createJob(t, server.URL)
+	created := createJob(t, server.URL)
 
 	result := make(chan signalResponse, 1)
 	go func() {
-		resp, err := http.Get(server.URL + "/workers/" + jobID + "/signal?timeout=2s")
+		req, err := http.NewRequest(http.MethodGet, server.URL+"/workers/"+created.WorkerID+"/signal?timeout=2s", nil)
+		if err != nil {
+			t.Errorf("create signal request: %v", err)
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+created.WorkerToken)
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Errorf("signal request failed: %v", err)
 			return
@@ -36,7 +42,7 @@ func TestWorkerReceivesSignal(t *testing.T) {
 		result <- got
 	}()
 
-	postJSON(t, server.URL+"/jobs/"+jobID+"/signal", signalRequest{
+	postJSON(t, server.URL+"/jobs/"+created.JobID+"/signal", signalRequest{
 		Command: "./llar make -v madler/zlib@v1.3.1",
 	})
 
@@ -44,6 +50,9 @@ func TestWorkerReceivesSignal(t *testing.T) {
 	case got := <-result:
 		if got.Command != "./llar make -v madler/zlib@v1.3.1" {
 			t.Fatalf("command = %q", got.Command)
+		}
+		if got.JobID != created.JobID {
+			t.Fatalf("jobID = %q, want %q", got.JobID, created.JobID)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("worker did not receive signal")
@@ -55,14 +64,14 @@ func TestWorkerPostsEvent(t *testing.T) {
 	server := httptest.NewServer(app.routes())
 	defer server.Close()
 
-	jobID := createJob(t, server.URL)
-	postJSON(t, server.URL+"/jobs/"+jobID+"/events", eventRequest{
+	created := createJob(t, server.URL)
+	postJSON(t, server.URL+"/jobs/"+created.JobID+"/events", eventRequest{
 		Type:   "status",
 		Status: "completed",
 		Output: "ok",
 	})
 
-	resp, err := http.Get(server.URL + "/jobs/" + jobID)
+	resp, err := http.Get(server.URL + "/jobs/" + created.JobID)
 	if err != nil {
 		t.Fatalf("get job: %v", err)
 	}
@@ -76,7 +85,7 @@ func TestWorkerPostsEvent(t *testing.T) {
 	}
 }
 
-func createJob(t *testing.T, baseURL string) string {
+func createJob(t *testing.T, baseURL string) createJobResponse {
 	t.Helper()
 	resp := postJSON(t, baseURL+"/jobs", createJobRequest{
 		Module:  "madler/zlib",
@@ -88,10 +97,10 @@ func createJob(t *testing.T, baseURL string) string {
 		t.Fatalf("decode create job: %v", err)
 	}
 	resp.Body.Close()
-	if got.JobID == "" {
-		t.Fatal("empty job id")
+	if got.JobID == "" || got.WorkerID == "" || got.WorkerToken == "" {
+		t.Fatalf("incomplete create job response: %+v", got)
 	}
-	return got.JobID
+	return got
 }
 
 func postJSON[T any](t *testing.T, url string, body T) *http.Response {

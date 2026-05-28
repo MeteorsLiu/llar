@@ -7,8 +7,12 @@ on:
         description: Demo server URL
         required: true
         type: string
-      job_id:
-        description: Demo job ID
+      worker_id:
+        description: Demo worker ID
+        required: true
+        type: string
+      worker_token:
+        description: Demo worker token
         required: true
         type: string
 
@@ -25,5 +29,6 @@ jobs:
       - name: Run demo worker
         env:
           SERVER_URL: ${{ inputs.server_url }}
-          JOB_ID: ${{ inputs.job_id }}
-        run: ./scripts/cloud-build-demo/worker.sh "$SERVER_URL" "$JOB_ID"
+          WORKER_ID: ${{ inputs.worker_id }}
+          WORKER_TOKEN: ${{ inputs.worker_token }}
+        run: ./scripts/cloud-build-demo/worker.sh "$SERVER_URL" "$WORKER_ID" "$WORKER_TOKEN"

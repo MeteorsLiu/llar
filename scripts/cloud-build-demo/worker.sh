@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: worker.sh <server-url> <job-id>" >&2
+if [[ $# -ne 3 ]]; then
+  echo "usage: worker.sh <server-url> <worker-id> <worker-token>" >&2
   exit 2
 fi
 
 server_url="${1%/}"
-job_id="$2"
+worker_id="$2"
+worker_token="$3"
 
-signal_json="$(curl -fsS "${server_url}/workers/${job_id}/signal?timeout=300s")"
+signal_json="$(curl -fsS \
+  -H "Authorization: Bearer ${worker_token}" \
+  "${server_url}/workers/${worker_id}/signal?timeout=300s")"
 command="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["command"])' <<<"${signal_json}")"
+job_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["jobID"])' <<<"${signal_json}")"
 
 set +e
 output="$(bash -lc "${command}" 2>&1)"

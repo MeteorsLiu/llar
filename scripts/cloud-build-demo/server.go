@@ -11,9 +11,11 @@ import (
 )
 
 type app struct {
-	mu     sync.Mutex
-	nextID int
-	jobs   map[string]*job
+	mu         sync.Mutex
+	nextJobID  int
+	nextWorkID int
+	jobs       map[string]*job
+	workers    map[string]*worker
 }
 
 type job struct {
@@ -26,6 +28,13 @@ type job struct {
 	signal chan signalResponse
 }
 
+type worker struct {
+	ID        string `json:"id"`
+	Token     string `json:"-"`
+	JobID     string `json:"jobID"`
+	Connected bool   `json:"connected"`
+}
+
 type createJobRequest struct {
 	Module  string            `json:"module"`
 	Version string            `json:"version"`
@@ -33,7 +42,9 @@ type createJobRequest struct {
 }
 
 type createJobResponse struct {
-	JobID string `json:"jobID"`
+	JobID       string `json:"jobID"`
+	WorkerID    string `json:"workerID"`
+	WorkerToken string `json:"workerToken"`
 }
 
 type signalRequest struct {
@@ -42,6 +53,7 @@ type signalRequest struct {
 
 type signalResponse struct {
 	Command string `json:"command"`
+	JobID   string `json:"jobID"`
 }
 
 type eventRequest struct {
@@ -52,7 +64,10 @@ type eventRequest struct {
 }
 
 func newApp() *app {
-	return &app{jobs: map[string]*job{}}
+	return &app{
+		jobs:    map[string]*job{},
+		workers: map[string]*worker{},
+	}
 }
 
 func (a *app) routes() http.Handler {
@@ -60,7 +75,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /jobs", a.createJob)
 	mux.HandleFunc("GET /jobs/{jobID}", a.getJob)
 	mux.HandleFunc("POST /jobs/{jobID}/signal", a.signalJob)
-	mux.HandleFunc("GET /workers/{jobID}/signal", a.waitSignal)
+	mux.HandleFunc("GET /workers/{workerID}/signal", a.waitSignal)
 	mux.HandleFunc("POST /jobs/{jobID}/events", a.postEvent)
 	return mux
 }
@@ -72,17 +87,29 @@ func (a *app) createJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	a.nextID++
-	id := fmt.Sprintf("job-%d", a.nextID)
-	a.jobs[id] = &job{
-		ID:      id,
+	a.nextJobID++
+	a.nextWorkID++
+	jobID := fmt.Sprintf("job-%d", a.nextJobID)
+	workerID := fmt.Sprintf("worker-%d", a.nextWorkID)
+	workerToken := fmt.Sprintf("demo-token-%d", a.nextWorkID)
+	a.jobs[jobID] = &job{
+		ID:      jobID,
 		Module:  req.Module,
 		Version: req.Version,
 		Matrix:  req.Matrix,
 		signal:  make(chan signalResponse, 1),
 	}
+	a.workers[workerID] = &worker{
+		ID:    workerID,
+		Token: workerToken,
+		JobID: jobID,
+	}
 	a.mu.Unlock()
-	writeJSON(w, http.StatusOK, createJobResponse{JobID: id})
+	writeJSON(w, http.StatusOK, createJobResponse{
+		JobID:       jobID,
+		WorkerID:    workerID,
+		WorkerToken: workerToken,
+	})
 }
 
 func (a *app) getJob(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +131,7 @@ func (a *app) signalJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	select {
-	case j.signal <- signalResponse{Command: req.Command}:
+	case j.signal <- signalResponse{Command: req.Command, JobID: j.ID}:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 	default:
 		http.Error(w, "signal already pending", http.StatusConflict)
@@ -112,8 +139,20 @@ func (a *app) signalJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) waitSignal(w http.ResponseWriter, r *http.Request) {
-	j := a.jobByID(w, r.PathValue("jobID"))
+	wrk := a.workerByID(w, r.PathValue("workerID"))
+	if wrk == nil {
+		return
+	}
+	if got, want := r.Header.Get("Authorization"), "Bearer "+wrk.Token; got != want {
+		http.Error(w, "invalid worker token", http.StatusUnauthorized)
+		return
+	}
+	a.mu.Lock()
+	wrk.Connected = true
+	j := a.jobs[wrk.JobID]
+	a.mu.Unlock()
 	if j == nil {
+		http.Error(w, "job not found", http.StatusNotFound)
 		return
 	}
 	timeout := 30 * time.Second
@@ -128,6 +167,17 @@ func (a *app) waitSignal(w http.ResponseWriter, r *http.Request) {
 	case <-time.After(timeout):
 		http.Error(w, "timeout waiting for signal", http.StatusGatewayTimeout)
 	}
+}
+
+func (a *app) workerByID(w http.ResponseWriter, id string) *worker {
+	a.mu.Lock()
+	wrk := a.workers[id]
+	a.mu.Unlock()
+	if wrk == nil {
+		http.Error(w, "worker not found", http.StatusNotFound)
+		return nil
+	}
+	return wrk
 }
 
 func (a *app) postEvent(w http.ResponseWriter, r *http.Request) {
