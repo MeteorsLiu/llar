@@ -36,7 +36,7 @@ SERVER_URL="${server_url}" JOB_ID="${job_id}" \
 python3 - <<'PY' | curl -fsS -X POST \
   -H 'Content-Type: application/json' \
   --data-binary @- \
-  "${SERVER_URL}/jobs/${JOB_ID}/events"
+  "${server_url}/jobs/${job_id}/events"
 import json
 import os
 
