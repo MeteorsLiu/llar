@@ -445,11 +445,50 @@ Every job assigned to a worker uses its own workspace and cache root. Completed
 job workspaces are cleaned before the worker exits. This preserves `llar`
 isolation even when a worker executes more than one job.
 
-If a provisioned worker never connects or disconnects before terminal status for
-its assigned jobs, the Scheduler keeps the original job IDs, treats affected
-worker assignments as lost, and may provision replacement workers. Client
-subscribers continue waiting on the same client WebSocket until each job reaches
-`completed` or `failed`.
+If a provisioned worker never connects or misses its reconnect window after
+disconnecting before terminal status, the Scheduler keeps the original job IDs,
+treats affected worker assignments as lost, and may provision replacement
+workers. Client subscribers continue waiting on the same client WebSocket until
+each job reaches `completed` or `failed`.
+
+Worker disconnect recovery:
+
+```text
+1. Worker WebSocket disconnects.
+2. Scheduler marks the worker as reconnecting and starts a 150 second reconnect
+   timer.
+3. Jobs assigned to that worker stay pending and keep the same jobID.
+4. The Scheduler does not assign those jobs to another worker during the
+   reconnect window.
+```
+
+If the worker reconnects within 150 seconds, it reconnects with the same worker
+ID and worker token:
+
+```text
+GET /v1/workers/ws
+Authorization: Bearer <worker_token>
+```
+
+The Scheduler recognizes the worker by `workerID + token`, verifies that the
+worker is still in the reconnect window, and restores the worker connection. The
+jobs remain assigned to the same worker, so later log/status messages with those
+job IDs are fanned out to client subscribers exactly as before. Clients that
+lost their own WebSocket reconnect independently through
+`GET /v1/jobs/{jobID}/ws`; the recovery handle for clients is always `jobID`,
+not worker ID.
+
+If the worker does not reconnect within 150 seconds, the Scheduler reclaims it:
+
+```text
+1. Mark the worker unavailable.
+2. Invalidate the worker token.
+3. Unassign its pending jobs.
+4. Requeue those jobs for other workers, keeping the original jobIDs.
+```
+
+Any later reconnect or result submission from a reclaimed worker is rejected.
+A job accepts terminal status only from its currently assigned worker.
 
 ## Client Install Flow
 
