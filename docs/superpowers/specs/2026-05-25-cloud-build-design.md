@@ -36,45 +36,63 @@ Layered module view:
 
 ```mermaid
 flowchart TB
-  subgraph Entry["Entry Layer"]
+  subgraph EntryRow[" "]
+    direction LR
+    EntryLabel["Entry Layer"]
     CLI["llar install"]
     SubmitAPI["POST /v1/jobs"]
-    ClientWS["GET /v1/jobs/{jobID}/ws"]
-    WorkerWS["GET /v1/workers/{workerID}/ws"]
+    ClientWS["Client Job WS"]
+    WorkerWS["Worker Control WS"]
+    EntryLabel ~~~ CLI ~~~ SubmitAPI ~~~ ClientWS ~~~ WorkerWS
   end
 
-  subgraph SchedulerLayer["Scheduler Layer"]
+  subgraph SchedulerRow[" "]
+    direction LR
+    SchedulerLabel["Scheduler Layer"]
     JobAPI["Job API"]
     Dedupe["Artifact Dedupe"]
     Queue["Provision Queue"]
     Provisioner["Worker Provisioner"]
     Fanout["Client WS Fanout"]
     WorkerControl["Worker Control Plane"]
+    SchedulerLabel ~~~ JobAPI ~~~ Dedupe ~~~ Queue ~~~ Provisioner ~~~ Fanout ~~~ WorkerControl
   end
 
-  subgraph Execution["Execution Layer"]
+  subgraph ExecutionRow[" "]
+    direction LR
+    ExecutionLabel["Execution Layer"]
     Provider["Worker Provider<br/>GitHub Actions / Kubernetes"]
     EdgeWorker["llar-edge-worker"]
     DepInstaller["Dependency Artifact Installer"]
     LocalBuild["llar make -v"]
     Publisher["Artifact Publisher"]
+    ExecutionLabel ~~~ Provider ~~~ EdgeWorker ~~~ DepInstaller ~~~ LocalBuild ~~~ Publisher
   end
 
-  subgraph State["State Layer"]
+  subgraph StateRow[" "]
+    direction LR
+    StateLabel["State Layer"]
     RedisState["Redis<br/>artifact state + Asynq"]
     DB["DB<br/>artifacts / jobs / workers"]
     LogRing["In-memory Log Ring"]
+    StateLabel ~~~ RedisState ~~~ DB ~~~ LogRing
   end
 
-  subgraph ArtifactStore["Artifact Layer"]
+  subgraph ArtifactRow[" "]
+    direction LR
+    ArtifactLabel["Artifact Layer"]
     GHCR["GHCR<br/>OCI index + blob"]
     S3["S3-compatible<br/>future backend"]
+    ArtifactLabel ~~~ GHCR ~~~ S3
   end
 
-  CLI ~~~ JobAPI
-  JobAPI ~~~ Provider
-  Provider ~~~ RedisState
-  RedisState ~~~ GHCR
+  EntryLabel ~~~ SchedulerLabel
+  SchedulerLabel ~~~ ExecutionLabel
+  ExecutionLabel ~~~ StateLabel
+  StateLabel ~~~ ArtifactLabel
+
+  classDef layerLabel fill:transparent,stroke:transparent,color:#333;
+  class EntryLabel,SchedulerLabel,ExecutionLabel,StateLabel,ArtifactLabel layerLabel;
 ```
 
 - **Client**: `llar install`. Resolves the requested module locally, computes
