@@ -32,6 +32,77 @@ flowchart LR
   Scheduler -.->|"state + queue dedupe"| Redis["Redis + Asynq"]
 ```
 
+Layered module view:
+
+```mermaid
+flowchart TB
+  subgraph Entry["Entry Layer"]
+    CLI["llar install"]
+    SubmitAPI["POST /v1/jobs"]
+    ClientWS["GET /v1/jobs/{jobID}/ws"]
+    WorkerWS["GET /v1/workers/{workerID}/ws"]
+  end
+
+  subgraph SchedulerLayer["Scheduler Layer"]
+    JobAPI["Job API"]
+    Dedupe["Artifact Dedupe"]
+    Queue["Provision Queue"]
+    Provisioner["Worker Provisioner"]
+    Fanout["Client WS Fanout"]
+    WorkerControl["Worker Control Plane"]
+  end
+
+  subgraph Execution["Execution Layer"]
+    Provider["Worker Provider<br/>GitHub Actions / Kubernetes"]
+    EdgeWorker["llar-edge-worker"]
+    DepInstaller["Dependency Artifact Installer"]
+    LocalBuild["llar make -v"]
+    Publisher["Artifact Publisher"]
+  end
+
+  subgraph State["State Layer"]
+    RedisState["Redis<br/>artifact state + Asynq"]
+    DB["DB<br/>artifacts / jobs / workers"]
+    LogRing["In-memory Log Ring"]
+  end
+
+  subgraph ArtifactStore["Artifact Layer"]
+    GHCR["GHCR<br/>OCI index + blob"]
+    S3["S3-compatible<br/>future backend"]
+  end
+
+  CLI --> SubmitAPI
+  CLI --> ClientWS
+  EdgeWorker --> WorkerWS
+
+  SubmitAPI --> JobAPI
+  ClientWS --> Fanout
+  WorkerWS --> WorkerControl
+
+  JobAPI --> Dedupe
+  Dedupe --> RedisState
+  Dedupe --> DB
+  JobAPI --> Queue
+  Queue --> RedisState
+  Queue --> Provisioner
+  Provisioner --> Provider
+
+  Provider --> EdgeWorker
+  WorkerControl --> EdgeWorker
+  EdgeWorker --> DepInstaller
+  DepInstaller --> GHCR
+  DepInstaller --> S3
+  EdgeWorker --> LocalBuild
+  LocalBuild --> Publisher
+  Publisher --> GHCR
+  Publisher --> S3
+
+  WorkerControl --> LogRing
+  WorkerControl --> DB
+  Fanout --> LogRing
+  Fanout --> DB
+```
+
 - **Client**: `llar install`. Resolves the requested module locally, computes
   the existing build order, submits each module build to the Scheduler, downloads
   artifacts, writes the local build cache, and prints the root metadata.
