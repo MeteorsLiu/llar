@@ -124,6 +124,7 @@ type SubmitJobResponse struct {
 type Artifact struct {
 	URL      string `json:"url"`
 	Type     string `json:"type"`     // zip | tar.gz | tar.zst
+	Storage  string `json:"storage"`  // http | ghcr
 	Metadata string `json:"metadata"`
 	Checksum string `json:"checksum"` // SHA-256 of archive bytes
 }
@@ -356,15 +357,29 @@ mechanism. S3-compatible storage, GitHub Releases, GitHub Packages, local
 storage, and future backends are implementation choices behind an internal
 artifact store abstraction.
 
-The public API only exposes completed artifacts as `Artifact{URL, Type,
-Metadata, Checksum}`. Clients download from `Artifact.URL`; they do not know how
-the artifact was uploaded or which backend produced the URL.
+The public API exposes completed artifacts as `Artifact{URL, Type, Storage,
+Metadata, Checksum}`. Clients download from `Artifact.URL`. `Artifact.Storage`
+selects the download behavior:
+
+```text
+http
+  URL is a direct HTTP file URL. The client downloads it with a normal GET.
+
+ghcr
+  URL is a GitHub Container Registry blob URL. The client downloads it with the
+  same style Homebrew uses for bottles:
+
+  Authorization: Bearer QQ==
+
+  Private GHCR packages may override this with client-local registry
+  credentials. Credentials are never stored in Artifact.
+```
 
 The Scheduler uses the artifact store abstraction for artifact lookup and for
 publishing completed artifact metadata. The Edge Worker uses provider-specific
 upload capability supplied through that abstraction. The upload path may be a
-direct object-storage upload, a Scheduler-mediated upload, a GitHub Release
-asset upload, or another backend-specific mechanism.
+direct object-storage upload, a GitHub Release asset upload, GHCR OCI publish,
+or another backend-specific mechanism.
 
 Those storage details must not leak into the public job protocol. For cloud
 build orchestration, the only stable contract is:
@@ -375,9 +390,50 @@ completed build output -> completed Artifact
 ```
 
 `Artifact.URL` must be usable by clients when `POST /v1/jobs` returns
-`status=ready` or when a job WebSocket reports `completed`. URL lifetime,
-refresh, redirect, upload method, and backend-specific headers are artifact
-store implementation details.
+`status=ready` or when a job WebSocket reports `completed`. The Scheduler must
+not proxy artifact downloads; artifact bytes flow from the artifact backend to
+the client.
+
+### GHCR Artifact Store
+
+GitHub Container Registry is supported using the same shape as Homebrew bottles.
+The mapping is:
+
+```text
+package = ghcr.io/<owner>/<target.module>
+tag     = target.version
+matrix  = OCI index manifest annotation org.llar.matrix = MatrixStr
+blob    = artifact archive layer
+```
+
+For example, `pnggroup/libpng@v1.6.43` is published under:
+
+```text
+ghcr.io/<owner>/pnggroup/libpng:v1.6.43
+```
+
+The tag points to an OCI image index. Each matrix variant is an index manifest
+entry. The index entry SHOULD fill standard OCI `platform.os` and
+`platform.architecture` when those values are available, but llar artifact
+matching uses the custom annotation:
+
+```text
+org.llar.matrix = <MatrixStr>
+```
+
+The worker uploads the archive blob, writes or updates the version index, and
+reports the final blob URL:
+
+```text
+https://ghcr.io/v2/<owner>/<target.module>/blobs/sha256:<digest>
+```
+
+Public GHCR packages must be pre-created or made public manually before clients
+can use anonymous downloads. For public packages, clients send
+`Authorization: Bearer QQ==`. Private GHCR packages use client-local registry
+credentials. Publish credentials are provided by the worker runtime, such as
+GitHub Actions `GITHUB_TOKEN` or provider-injected secrets; they are not sent
+through the Scheduler protocol.
 
 ### Client Job WebSocket
 
@@ -518,78 +574,133 @@ Kubernetes Job/Pod: scheduler URL + worker ID + worker token as environment vari
 Fallback provider: equivalent worker launch metadata
 ```
 
-The worker starts, opens an authenticated outbound WebSocket to the Scheduler,
-and waits for the job assignment:
+The worker starts and opens an authenticated outbound WebSocket to the
+Scheduler:
 
 ```text
-GET /v1/workers/ws
+GET /v1/workers/{workerID}/ws
+Authorization: Bearer <worker_token>
 ```
 
-This is an internal control-plane endpoint. The exact URL can change, but the
-direction must not: workers connect to the Scheduler, not the other way around.
+This is an internal control-plane endpoint. Authentication happens before the
+HTTP upgrade completes. Failed authentication returns an HTTP error and does not
+create a WebSocket. The exact URL can change, but the direction must not:
+workers connect to the Scheduler, not the other way around.
 
 After authenticating the worker ID/token, the Scheduler records the worker as
-connected. The worker registers static resource facts and periodically sends
-resource heartbeats. The Scheduler owns concurrency and lifecycle limits; workers
-do not choose their own limits. The Scheduler may send job messages while the
-worker is eligible to accept work.
+connected. The worker periodically sends resource heartbeats. The first
+heartbeat gates scheduling eligibility: the Scheduler must not send commands to
+a connection until it has received at least one heartbeat. Heartbeats are not an
+application-level liveness check. The Scheduler does not close a healthy TCP
+connection merely because heartbeats are late or missing; connection liveness is
+determined by TCP keepalive and WebSocket read/write errors.
 
-```go
-type WorkerJobMessage struct {
-	Type      string          `json:"type"` // job
-	JobID     string          `json:"jobID"`
-	Target    Target          `json:"target"`
-	Matrix    MatrixSelection `json:"matrix"`
-	MatrixStr string          `json:"matrixStr"`
-}
+Worker WebSocket messages have three top-level types:
+
+```text
+heartbeat  worker -> scheduler
+command    scheduler -> worker
+event      worker -> scheduler
 ```
 
-Worker-to-Scheduler log/status messages include `jobID` because one worker
-connection may carry multiple jobs.
+There is no `register` message. Successful WebSocket upgrade is worker
+registration. There is no command ack. If a connection is lost and later
+restored inside the reconnect window, the Scheduler may re-send still-pending
+commands for the same worker.
+
+The Scheduler owns concurrency and lifecycle limits; workers do not choose their
+own limits. The Scheduler may send commands while the worker is eligible to
+accept work.
 
 ```go
-type WorkerRegisterMessage struct {
-	Type        string          `json:"type"` // register
-	WorkerID    string          `json:"workerID"`
-	Resources   WorkerResources `json:"resources"`
-	OS          string          `json:"os,omitempty"`
-	Arch        string          `json:"arch,omitempty"`
-}
-
 type WorkerHeartbeatMessage struct {
 	Type        string          `json:"type"` // heartbeat
-	WorkerID    string          `json:"workerID"`
 	RunningJobs int             `json:"runningJobs"`
 	Resources   WorkerResources `json:"resources"`
 }
 
 type WorkerResources struct {
-	CPUUsage    float64 `json:"cpuUsage,omitempty"`    // 0.0-1.0
-	CPUCores    int     `json:"cpuCores,omitempty"`
-	MemoryUsage float64 `json:"memoryUsage,omitempty"` // 0.0-1.0
-	MemoryTotal int64   `json:"memoryTotal,omitempty"`
-	DiskUsage   float64 `json:"diskUsage,omitempty"`   // 0.0-1.0
+	CPUUsage    float64 `json:"cpuUsage"`    // 0.0-1.0
+	CPUCores    int     `json:"cpuCores"`
+	MemoryUsage float64 `json:"memoryUsage"` // 0.0-1.0
+	MemoryTotal int64   `json:"memoryTotal"` // bytes
+	DiskUsage   float64 `json:"diskUsage"`   // 0.0-1.0
 }
 
-type WorkerLogMessage struct {
-	Type  string  `json:"type"` // log
-	JobID string  `json:"jobID"`
-	Data  LogData `json:"data"`
+type WorkerCommandMessage struct {
+	Type    string            `json:"type"`    // command
+	Command string            `json:"command"` // run_job
+	Body    RunJobCommandBody `json:"body"`
 }
 
-type WorkerStatusMessage struct {
-	Type  string     `json:"type"` // status
-	JobID string     `json:"jobID"`
-	State JobState   `json:"state"` // completed | failed
-	Body  StatusBody `json:"body"`
+type RunJobCommandBody struct {
+	Target   Target          `json:"target"`
+	Matrix   MatrixSelection `json:"matrix"`
+	Artifact ArtifactSpec    `json:"artifact"`
+}
+
+type ArtifactSpec struct {
+	Type    string      `json:"type"` // zip | tar.gz | tar.zst
+	Publish PublishSpec `json:"publish"`
+}
+
+type PublishSpec struct {
+	Type   string `json:"type"`             // ghcr | s3_presigned_put | ...
+	Config any    `json:"config,omitempty"` // type-specific; omitted for ghcr
+}
+
+type WorkerEventMessage struct {
+	Type   string          `json:"type"`  // event
+	Event  string          `json:"event"` // log | completed | failed
+	Target Target          `json:"target"`
+	Matrix MatrixSelection `json:"matrix"`
+	Data   any             `json:"data"`
+}
+
+type WorkerLogEventData struct {
+	Stream string `json:"stream,omitempty"` // stdout | stderr
+	Text   string `json:"text"`             // UTF-8, ANSI preserved
+}
+
+type WorkerCompletedEventData struct {
+	Artifact Artifact `json:"artifact"`
+}
+
+type WorkerFailedEventData struct {
+	Status  int    `json:"status"`
+	Message string `json:"message"`
 }
 ```
 
+Worker protocol does not expose `jobID`. Workers build artifacts identified by
+`target + matrix`. The Scheduler maps each worker event back to the pending job
+by converting `target + matrix` into the internal ArtifactKey and selecting the
+pending job assigned to the current worker.
+
+`run_job` does not carry `verbose`. Edge Workers always run `llar make -v` and
+always stream stdout/stderr as `event=log`. The Scheduler stores logs in the
+per-job ring and forwards them only to client subscribers connected with
+`verbose=true`.
+
+For `artifact.publish.type=ghcr`, `artifact.publish.config` is omitted. The
+worker derives the GHCR package and tag from the command:
+
+```text
+package = ghcr.io/<owner>/<target.module>
+tag     = target.version
+matrix  = MatrixStr from command.matrix
+```
+
+`owner` and publish credentials are provided by the worker runtime. For GitHub
+Actions, this normally comes from `GITHUB_REPOSITORY_OWNER`,
+`GITHUB_ACTOR`, and `GITHUB_TOKEN` with `packages: write` permission. The
+Scheduler does not receive or forward third-party publish credentials.
+
 The Scheduler stores worker logs and forwards them only to verbose client
-subscribers. Worker terminal status updates the job record, updates the artifact
-metadata on success, fans out terminal status to clients, closes the worker
-connection when the worker has no more running jobs, and triggers provider
-cleanup when needed.
+subscribers. Worker terminal events update the job record, update artifact
+metadata on success, fan out terminal status to clients, close client WebSockets,
+close the worker connection when the worker has no more running jobs, and
+trigger provider cleanup when needed.
 
 Worker reuse policy:
 
@@ -637,17 +748,17 @@ If the worker reconnects within 150 seconds, it reconnects with the same worker
 ID and worker token:
 
 ```text
-GET /v1/workers/ws
+GET /v1/workers/{workerID}/ws
 Authorization: Bearer <worker_token>
 ```
 
 The Scheduler recognizes the worker by `workerID + token`, verifies that the
 worker is still in the reconnect window, and restores the worker connection. The
-jobs remain assigned to the same worker, so later log/status messages with those
-job IDs are fanned out to client subscribers exactly as before. Clients that
-lost their own WebSocket reconnect independently through
-`GET /v1/jobs/{jobID}/ws`; the recovery handle for clients is always `jobID`,
-not worker ID.
+jobs remain assigned to the same worker, so later worker events for the same
+target and matrix are mapped back to the pending jobs and fanned out to client
+subscribers exactly as before. Clients that lost their own WebSocket reconnect
+independently through `GET /v1/jobs/{jobID}/ws`; the recovery handle for
+clients is always `jobID`, not worker ID.
 
 If the worker does not reconnect within 150 seconds, the Scheduler reclaims it:
 
@@ -687,6 +798,12 @@ The client does not submit dependency metadata or BuildList to the Scheduler.
 It schedules modules one at a time in build order. Future concurrency can submit
 independent modules concurrently without changing the public job API.
 
+Dependency scheduling is client-owned. The Scheduler does not recursively submit
+dependency jobs. The Edge Worker resolves dependencies only to prepare its local
+build workspace; dependency artifacts are prerequisites for `run_job`. If a
+required dependency artifact is missing, the worker reports `event=failed` with
+status `424`.
+
 ## Edge Worker Runtime
 
 `llar-edge-worker` is a separate program from the user-facing `llar` CLI. It
@@ -702,8 +819,8 @@ the busy-only reuse policy. The initial implementation may set
 ```text
 1. Start with Scheduler URL, worker ID, and worker token from the worker provider.
 2. Open the outbound worker WebSocket to the Scheduler.
-3. Register worker resource facts.
-4. Receive `WorkerJobMessage` from the Scheduler.
+3. Send worker heartbeats with resource facts.
+4. Receive `command=run_job` from the Scheduler.
 5. Prepare an isolated per-job workspace.
 6. Resolve the target enough to identify direct dependency artifacts required by
    this build.
@@ -718,7 +835,7 @@ the busy-only reuse policy. The initial implementation may set
 11. If `llar make` succeeds, locate the target installDir in the workspace.
 12. Package installDir contents as an artifact archive.
 13. Upload the archive through the artifact store abstraction.
-14. Report completed with Artifact{URL, Type, Metadata, Checksum}.
+14. Report completed with Artifact{URL, Type, Storage, Metadata, Checksum}.
 15. If no jobs remain running, stop accepting new work and exit.
 ```
 
