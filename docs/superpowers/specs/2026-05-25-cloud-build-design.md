@@ -71,36 +71,10 @@ flowchart TB
     S3["S3-compatible<br/>future backend"]
   end
 
-  CLI --> SubmitAPI
-  CLI --> ClientWS
-  EdgeWorker --> WorkerWS
-
-  SubmitAPI --> JobAPI
-  ClientWS --> Fanout
-  WorkerWS --> WorkerControl
-
-  JobAPI --> Dedupe
-  Dedupe --> RedisState
-  Dedupe --> DB
-  JobAPI --> Queue
-  Queue --> RedisState
-  Queue --> Provisioner
-  Provisioner --> Provider
-
-  Provider --> EdgeWorker
-  WorkerControl --> EdgeWorker
-  EdgeWorker --> DepInstaller
-  DepInstaller --> GHCR
-  DepInstaller --> S3
-  EdgeWorker --> LocalBuild
-  LocalBuild --> Publisher
-  Publisher --> GHCR
-  Publisher --> S3
-
-  WorkerControl --> LogRing
-  WorkerControl --> DB
-  Fanout --> LogRing
-  Fanout --> DB
+  CLI ~~~ JobAPI
+  JobAPI ~~~ Provider
+  Provider ~~~ RedisState
+  RedisState ~~~ GHCR
 ```
 
 - **Client**: `llar install`. Resolves the requested module locally, computes
