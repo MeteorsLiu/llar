@@ -37,7 +37,7 @@ Layered module view:
 ```mermaid
 flowchart TB
   subgraph EntryRow["Entry Layer"]
-    direction LR
+    direction TB
     CLI["llar install"]
     SubmitAPI["POST /v1/jobs"]
     ClientWS["Client Job WS"]
@@ -46,7 +46,7 @@ flowchart TB
   end
 
   subgraph SchedulerRow["Scheduler Layer"]
-    direction LR
+    direction TB
     JobAPI["Job API"]
     Dedupe["Artifact Dedupe"]
     Queue["Provision Queue"]
@@ -57,7 +57,7 @@ flowchart TB
   end
 
   subgraph ExecutionRow["Execution Layer"]
-    direction LR
+    direction TB
     Provider["Worker Provider<br/>GitHub Actions / Kubernetes"]
     EdgeWorker["llar-edge-worker"]
     DepInstaller["Dependency Artifact Installer"]
@@ -67,7 +67,7 @@ flowchart TB
   end
 
   subgraph StateRow["State Layer"]
-    direction LR
+    direction TB
     RedisState["Redis<br/>artifact state + Asynq"]
     DB["DB<br/>artifacts / jobs / workers"]
     LogRing["In-memory Log Ring"]
@@ -75,7 +75,7 @@ flowchart TB
   end
 
   subgraph ArtifactRow["Artifact Layer"]
-    direction LR
+    direction TB
     GHCR["GHCR<br/>OCI index + blob"]
     S3["S3-compatible<br/>future backend"]
     GHCR ~~~ S3
