@@ -16,20 +16,20 @@ The cloud build system has four roles:
 
 ```mermaid
 flowchart LR
-  Client["Client\nllar install"] -->|POST /v1/jobs\nsubmit target + matrix| Scheduler["Scheduler\nAPI, dedupe, queue, WS fanout"]
-  Client <-->|GET /v1/jobs/{jobID}/ws\ncompleted / failed / logs| Scheduler
+  Client["Client<br/>llar install"] -->|"POST /v1/jobs<br/>submit target + matrix"| Scheduler["Scheduler<br/>API, dedupe, queue, WS fanout"]
+  Client <-->|"GET /v1/jobs/{jobID}/ws<br/>completed / failed / logs"| Scheduler
 
-  Scheduler -->|workflow_dispatch / provider API\nworkerID + token| Provider["Worker Provider\nGitHub Actions / Kubernetes / fallback"]
-  Provider -->|starts| Worker["Edge Worker\nllar-edge-worker"]
-  Worker -->|outbound WS\nheartbeat / event| Scheduler
-  Scheduler -->|WS command=run_job\ntarget + matrix + artifact publish| Worker
+  Scheduler -->|"workflow_dispatch / provider API<br/>workerID + token"| Provider["Worker Provider<br/>GitHub Actions / Kubernetes / fallback"]
+  Provider -->|"starts"| Worker["Edge Worker<br/>llar-edge-worker"]
+  Worker -->|"outbound WS<br/>heartbeat / event"| Scheduler
+  Scheduler -->|"WS command=run_job<br/>target + matrix + artifact publish"| Worker
 
-  Worker -->|download dependency artifacts| Store["Artifact Store\nGHCR / S3 / future backends"]
-  Worker -->|publish completed artifact| Store
-  Store -->|artifact URL\nhttp or ghcr blob| Client
+  Worker -->|"download dependency artifacts"| Store["Artifact Store<br/>GHCR / S3 / future backends"]
+  Worker -->|"publish completed artifact"| Store
+  Store -->|"artifact URL<br/>http or ghcr blob"| Client
 
-  Scheduler -.->|artifact metadata\nlookup / persist| DB["Artifacts + Jobs DB"]
-  Scheduler -.->|state + queue dedupe| Redis["Redis + Asynq"]
+  Scheduler -.->|"artifact metadata<br/>lookup / persist"| DB["Artifacts + Jobs DB"]
+  Scheduler -.->|"state + queue dedupe"| Redis["Redis + Asynq"]
 ```
 
 - **Client**: `llar install`. Resolves the requested module locally, computes
