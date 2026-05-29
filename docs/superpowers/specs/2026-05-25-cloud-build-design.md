@@ -193,11 +193,15 @@ type SubmitJobResponse struct {
 }
 
 type Artifact struct {
-	URL      string `json:"url"`
-	Type     string `json:"type"`     // zip | tar.gz | tar.zst
-	Storage  string `json:"storage"`  // http | ghcr
-	Metadata string `json:"metadata"`
-	Checksum string `json:"checksum"` // SHA-256 of archive bytes
+	Source   ArtifactSource `json:"source"`
+	Type     string         `json:"type"`     // zip | tar.gz | tar.zst
+	Metadata string         `json:"metadata"`
+	Checksum string         `json:"checksum"` // SHA-256 of archive bytes
+}
+
+type ArtifactSource struct {
+	Type string `json:"type"` // http | ghcr
+	URL  string `json:"url"`
 }
 ```
 
@@ -309,7 +313,8 @@ CREATE TABLE artifacts (
   version     TEXT NOT NULL,
   matrix_str  TEXT NOT NULL,
 
-  url         TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_url  TEXT NOT NULL,
   type        TEXT NOT NULL,
   metadata    TEXT NOT NULL,
   checksum    TEXT NOT NULL,
@@ -428,17 +433,19 @@ mechanism. S3-compatible storage, GitHub Releases, GitHub Packages, local
 storage, and future backends are implementation choices behind an internal
 artifact store abstraction.
 
-The public API exposes completed artifacts as `Artifact{URL, Type, Storage,
-Metadata, Checksum}`. Clients download from `Artifact.URL`. `Artifact.Storage`
-selects the download behavior:
+The public API exposes completed artifacts as `Artifact{Source, Type, Metadata,
+Checksum}`. `Artifact.Source` describes where and how the client downloads the
+archive. `Artifact.Type` describes how the downloaded archive is unpacked.
+`ArtifactSource.Type` selects the download behavior:
 
 ```text
 http
-  URL is a direct HTTP file URL. The client downloads it with a normal GET.
+  source.url is a direct HTTP file URL. The client downloads it with a normal
+  GET.
 
 ghcr
-  URL is a GitHub Container Registry blob URL. The client downloads it with the
-  same style Homebrew uses for bottles:
+  source.url is a GitHub Container Registry blob URL. The client downloads it
+  with the same style Homebrew uses for bottles:
 
   Authorization: Bearer QQ==
 
@@ -460,7 +467,7 @@ artifact key -> maybe completed Artifact
 completed build output -> completed Artifact
 ```
 
-`Artifact.URL` must be usable by clients when `POST /v1/jobs` returns
+`Artifact.Source.URL` must be usable by clients when `POST /v1/jobs` returns
 `status=ready` or when a job WebSocket reports `completed`. The Scheduler must
 not proxy artifact downloads; artifact bytes flow from the artifact backend to
 the client.
@@ -906,7 +913,7 @@ the busy-only reuse policy. The initial implementation may set
 11. If `llar make` succeeds, locate the target installDir in the workspace.
 12. Package installDir contents as an artifact archive.
 13. Upload the archive through the artifact store abstraction.
-14. Report completed with Artifact{URL, Type, Storage, Metadata, Checksum}.
+14. Report completed with Artifact{Source, Type, Metadata, Checksum}.
 15. If no jobs remain running, stop accepting new work and exit.
 ```
 
@@ -945,7 +952,7 @@ calls, artifact expiry, and race conditions.
   Kubernetes capacity, or other providers.
 - Exact Kubernetes resource model: Job vs Pod, timeout, and cleanup.
 - Worker token format, lifetime, rotation, and retry behavior.
-- Worker authentication with the Scheduler and object storage.
+- Worker authentication with the Scheduler and artifact store.
 - Client authentication with the Scheduler.
 - Artifact retention, eviction, and metadata persistence.
 - Whether future install concurrency should use DAG layers or a bounded worker
