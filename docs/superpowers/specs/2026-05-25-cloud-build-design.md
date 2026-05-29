@@ -14,8 +14,22 @@ or `build.Builder` behavior.
 
 The cloud build system has four roles:
 
-```text
-Client -> Scheduler -> Edge Worker -> Object Storage
+```mermaid
+flowchart LR
+  Client["Client\nllar install"] -->|POST /v1/jobs\nsubmit target + matrix| Scheduler["Scheduler\nAPI, dedupe, queue, WS fanout"]
+  Client <-->|GET /v1/jobs/{jobID}/ws\ncompleted / failed / logs| Scheduler
+
+  Scheduler -->|workflow_dispatch / provider API\nworkerID + token| Provider["Worker Provider\nGitHub Actions / Kubernetes / fallback"]
+  Provider -->|starts| Worker["Edge Worker\nllar-edge-worker"]
+  Worker -->|outbound WS\nheartbeat / event| Scheduler
+  Scheduler -->|WS command=run_job\ntarget + matrix + artifact publish| Worker
+
+  Worker -->|download dependency artifacts| Store["Artifact Store\nGHCR / S3 / future backends"]
+  Worker -->|publish completed artifact| Store
+  Store -->|artifact URL\nhttp or ghcr blob| Client
+
+  Scheduler -.->|artifact metadata\nlookup / persist| DB["Artifacts + Jobs DB"]
+  Scheduler -.->|state + queue dedupe| Redis["Redis + Asynq"]
 ```
 
 - **Client**: `llar install`. Resolves the requested module locally, computes
@@ -32,8 +46,10 @@ Client -> Scheduler -> Edge Worker -> Object Storage
   assignment, prepares dependency artifacts in its workspace, coordinates
   `llar make` as the build command, uploads the artifact, and streams logs/status
   back to the Scheduler.
-- **Object Storage**: Stores artifact archives. Clients and workers download
-  archives from object storage URLs; workers upload completed archives.
+- **Artifact Store**: Stores artifact archives. Clients and workers download
+  archives from artifact URLs; workers upload completed archives. The initial
+  backend can be GHCR, with S3-compatible and future backends hidden behind the
+  same abstraction.
 
 ## Command Semantics
 
