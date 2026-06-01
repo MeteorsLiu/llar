@@ -126,36 +126,38 @@ flowchart TB
 
 ## Matrix Handling
 
-The cloud API receives a structured matrix selection, not the internal matrix
-string.
+The cloud API receives the existing `formula.Matrix` shape, not the internal
+matrix string.
 
 ```go
-type MatrixSelection struct {
-	Require map[string]string `json:"require"`
-	Options map[string]string `json:"options,omitempty"`
+type Matrix struct {
+	Require        map[string][]string
+	Options        map[string][]string
+	DefaultOptions map[string][]string
 }
 ```
 
-`MatrixSelection` must be complete when sent to the Scheduler. The client is
-responsible for filling defaults, including the host matrix when the user did
-not pass matrix flags. The Scheduler validates the matrix but does not infer
-missing values from its own host.
+The matrix sent to the Scheduler must represent one concrete build variant.
+The client is responsible for filling defaults, including the host matrix when
+the user did not pass matrix flags. In practice, each selected dimension is sent
+as a single-element slice so `formula.Matrix.Combinations()` produces exactly
+one build key. The Scheduler validates the matrix but does not infer missing
+values from its own host.
 
-Internally, `MatrixSelection` is converted to the existing `formula.Matrix`
-shape by wrapping each selected value in a single-element slice. The internal
-`MatrixStr` is:
+The internal `MatrixStr` is derived from the same matrix:
 
 ```text
 formula.Matrix.Combinations()[0]
 ```
 
-`MatrixStr` is used for artifact keys, active-job dedupe, `modules.Options`,
-`build.Options`, workspace install directories, and build cache keys. The API
-does not expose `MatrixStr`.
+`MatrixStr` is used for artifact keys, active-job dedupe, workspace install
+directories, and build cache keys. The public API and `build.Options` do not
+accept `MatrixStr`; callers pass `formula.Matrix`, and internal code derives
+the string when needed.
 
-Cloud build does not redefine matrix behavior. It only converts the API matrix
-selection into the existing `MatrixStr` and passes that into the existing
-`modules` and `build` APIs.
+Cloud build does not redefine matrix behavior. It reuses `formula.Matrix` and
+the existing `Combinations()[0]` string for compatibility with current cache
+and install directory layout.
 
 ## Public API
 
@@ -169,8 +171,8 @@ Request:
 
 ```go
 type SubmitJobRequest struct {
-	Target Target          `json:"target"`
-	Matrix MatrixSelection `json:"matrix"`
+	Target Target         `json:"target"`
+	Matrix formula.Matrix `json:"matrix"`
 }
 
 type Target struct {
@@ -712,9 +714,9 @@ type WorkerCommandMessage struct {
 }
 
 type RunJobCommandBody struct {
-	Target   Target          `json:"target"`
-	Matrix   MatrixSelection `json:"matrix"`
-	Artifact ArtifactSpec    `json:"artifact"`
+	Target   Target         `json:"target"`
+	Matrix   formula.Matrix `json:"matrix"`
+	Artifact ArtifactSpec   `json:"artifact"`
 }
 
 type ArtifactSpec struct {
@@ -728,11 +730,11 @@ type PublishSpec struct {
 }
 
 type WorkerEventMessage struct {
-	Type   string          `json:"type"`  // event
-	Event  string          `json:"event"` // log | completed | failed
-	Target Target          `json:"target"`
-	Matrix MatrixSelection `json:"matrix"`
-	Data   any             `json:"data"`
+	Type   string         `json:"type"`  // event
+	Event  string         `json:"event"` // log | completed | failed
+	Target Target         `json:"target"`
+	Matrix formula.Matrix `json:"matrix"`
+	Data   any            `json:"data"`
 }
 
 type WorkerLogEventData struct {
@@ -857,19 +859,20 @@ A job accepts terminal status only from its currently assigned worker.
 ```text
 1. Parse CLI target and matrix flags.
 2. Resolve any omitted root version locally. SubmitJobRequest requires a version.
-3. Convert matrix flags into a complete MatrixSelection.
-4. Run modules.Load(root, MatrixStr) locally.
-5. Use the same postorder build ordering as the existing build path.
-6. For each module in build order:
+3. Convert matrix flags into a complete single-variant formula.Matrix.
+4. Derive matrixStr from formula.Matrix.Combinations()[0].
+5. Run modules.Load(root, matrixStr) locally.
+6. Use the same postorder build ordering as the existing build path.
+7. For each module in build order:
    a. Check local build cache using existing build cache helpers.
    b. If local cache hit, skip remote work.
    c. Submit POST /v1/jobs for that module.
    d. If ready, download the artifact.
    e. If pending, open /v1/jobs/{jobID}/ws and wait for completed/failed.
    f. Verify artifact checksum.
-   g. Extract artifact into the existing installDir for module/version/MatrixStr.
+   g. Extract artifact into the existing installDir for module/version/matrixStr.
    h. Write cache metadata through the same helpers/format used by build.Builder.
-7. Print the root module metadata.
+8. Print the root module metadata.
 ```
 
 The client does not submit dependency metadata or BuildList to the Scheduler.
@@ -881,6 +884,91 @@ dependency jobs. The Edge Worker resolves dependencies only to prepare its local
 build workspace; dependency artifacts are prerequisites for `run_job`. If a
 required dependency artifact is missing, the worker reports `event=failed` with
 status `424`.
+
+### Client Implementation Interfaces
+
+`llar install` uses the existing `build.Builder` instead of introducing a
+separate installer abstraction. Remote artifact resolution is a build mode.
+
+```go
+package build
+
+type Mode string
+
+const (
+	ModeLocal  Mode = "local"  // llar make
+	ModeRemote Mode = "remote" // llar install
+)
+
+type Options struct {
+	Store        repo.Store
+	Matrix       formula.Matrix
+	RunTest      bool
+	WorkspaceDir string
+
+	Mode    Mode
+	Remote  *remote.Client
+	Verbose bool
+}
+```
+
+`build.Options` does not expose `MatrixStr`. `NewBuilder` derives the internal
+matrix string from `Options.Matrix.Combinations()[0]` and uses it for the
+existing cache and install directory layout.
+
+`ModeLocal` preserves the current `llar make` behavior: cache misses run
+`OnBuild`. `ModeRemote` preserves the same build order, cache lookup, install
+directory calculation, and cache format, but changes the cache-miss action:
+
+```text
+1. Submit the current module target and formula.Matrix to the Scheduler.
+2. If the response is ready, use the returned Artifact.
+3. If the response is pending, wait for the job WebSocket to report completed
+   or failed.
+4. Download the completed artifact from Artifact.Source.
+5. Verify the archive checksum.
+6. Extract the archive into installDir(module, version, matrixStr).
+7. Write the module's .cache.json entry with the returned metadata.
+8. Return build.Result{Metadata, OutputDir}.
+```
+
+The `remote` package is only the Scheduler protocol client:
+
+```go
+package remote
+
+type Client struct {
+	// base URL, auth token, HTTP client, WebSocket dialer
+}
+
+type Options struct {
+	BaseURL string
+	Token   string
+	HTTP    *http.Client
+}
+
+func NewClient(opts Options) *Client
+
+func (c *Client) Submit(ctx context.Context, req SubmitJobRequest) (SubmitJobResponse, error)
+
+func (c *Client) Wait(ctx context.Context, jobID string, opts WaitOptions) (Artifact, error)
+
+type WaitOptions struct {
+	Verbose bool
+	OnLog   func(LogMessage)
+}
+```
+
+`Submit` performs only `POST /v1/jobs`. `Wait` performs only
+`GET /v1/jobs/{jobID}/ws?verbose=<bool>` and translates WebSocket status/log
+messages into an artifact, error, or `OnLog` callback. The `remote` package does
+not resolve dependencies, compute build order, extract archives, calculate
+install directories, or write `.cache.json`.
+
+`build.Options.Verbose` controls the `WaitOptions.Verbose` value used by remote
+mode. When verbose is enabled, `build` provides an `OnLog` callback that writes
+remote stdout/stderr fragments to the same output streams used by local verbose
+builds.
 
 ## Edge Worker Runtime
 
