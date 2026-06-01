@@ -986,12 +986,13 @@ cmd/agent/
 internal/agent/
   agent.go   // connect Scheduler, read commands, send heartbeats/events
   make.go    // run llar make -v and stream stdout/stderr
-  stat.go    // collect cpu/memory/disk facts for heartbeat
   types.go   // project-local JSON structs
 
+internal/stats/
+  stats.go   // collect cpu/memory/disk samples
+
 internal/protocol/
-  protocol.go // Encode/Decode
-  conn.go     // WebSocket JSON binding
+  protocol.go // Encode/Decode and message structs
 ```
 
 The project intentionally keeps the initial agent module small. Its required
@@ -1005,6 +1006,52 @@ behaviors are:
 5. Report completed or failed events.
 ```
 
+The agent run loop receives node facts from `stats.Collect`; it does not own the
+heartbeat timer or system metric collection.
+
+```go
+package agent
+
+type Config struct {
+	SchedulerURL string
+	ID           string
+	Token        string
+}
+
+func Run(ctx context.Context, cfg Config, samples <-chan stats.Sample) error
+```
+
+`agent.Run` consumes `stats.Sample` values, adds the current running job count,
+encodes heartbeat messages through `protocol.Encode`, and sends them through
+the Scheduler WebSocket. All WebSocket writes are serialized through one
+internal send channel so heartbeats, logs, and terminal events do not write the
+same connection concurrently.
+
+Node metric collection lives in a separate package:
+
+```go
+package stats
+
+type Sample struct {
+	Resources Resources
+	Time      time.Time
+}
+
+type Resources struct {
+	CPUUsage    float64 `json:"cpuUsage"`    // 0.0-1.0
+	CPUCores    int     `json:"cpuCores"`
+	MemoryUsage float64 `json:"memoryUsage"` // 0.0-1.0
+	MemoryTotal int64   `json:"memoryTotal"` // bytes
+	DiskUsage   float64 `json:"diskUsage"`   // 0.0-1.0
+}
+
+func Collect(ctx context.Context, interval time.Duration) <-chan Sample
+```
+
+`stats.Collect` owns the collection interval and uses
+`github.com/shirou/gopsutil/v4` internally. The `agent` and `protocol` packages
+do not import `gopsutil`.
+
 Artifact fetching, packaging, and publishing can start inside `agent.go` or
 `make.go` while the flow is small. They should only become separate files after
 the code has enough real logic to justify the split.
@@ -1016,11 +1063,12 @@ package with `llar`. During MVP, both repositories define matching JSON wire
 structs. The wire contract in this spec is the source of truth.
 
 The protocol module follows the same public boundary as `multipath`: protocol
-behavior is `Encode` and `Decode`. The transport binding is a thin convenience
-wrapper for WebSocket JSON reads/writes.
+behavior is only `Encode` and `Decode`.
 
 The WebSocket library is `github.com/coder/websocket`. It provides maintained
 context-aware WebSocket support and `wsjson` helpers that fit JSON messages.
+It is used by the agent and Scheduler WebSocket loops, not by the protocol
+package itself.
 
 ```go
 package protocol
@@ -1048,25 +1096,9 @@ first reads the envelope type, then decodes the payload into the concrete body
 for that type. Unknown message types, unknown command/event names, and mismatched
 bodies return protocol errors.
 
-The WebSocket binding stays in the same package but is not the protocol itself:
-
-```go
-type Conn struct {
-	// wraps *websocket.Conn
-}
-
-func NewConn(c *websocket.Conn) *Conn
-
-func (c *Conn) Encode(ctx context.Context, msg Message) error
-
-func (c *Conn) Decode(ctx context.Context) (Message, error)
-
-func (c *Conn) Close(code websocket.StatusCode, reason string) error
-```
-
-`Conn.Encode` calls `protocol.Encode` and writes the resulting JSON with
-`wsjson.Write`. `Conn.Decode` reads one JSON message with `wsjson.Read` and then
-calls `protocol.Decode`.
+WebSocket loops call `protocol.Encode` before `wsjson.Write` and call
+`protocol.Decode` after `wsjson.Read`. The protocol package must not wrap
+WebSocket connections.
 
 Message body names stay short because the package name carries the context:
 
