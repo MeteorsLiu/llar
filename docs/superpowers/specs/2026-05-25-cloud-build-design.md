@@ -970,6 +970,155 @@ mode. When verbose is enabled, `build` provides an `OnLog` callback that writes
 remote stdout/stderr fragments to the same output streams used by local verbose
 builds.
 
+## Edge Agent Project
+
+Scheduler and edge execution code do not live in the `llar` repository. They
+belong in a separate service repository. The `llar` repository only keeps the
+user CLI, local build logic, and the `remote.Client` used by `llar install`.
+
+The service repository contains the Scheduler and Edge Agent binaries. MVP
+starts with the agent side:
+
+```text
+cmd/agent/
+  main.go
+
+internal/agent/
+  agent.go   // connect Scheduler, read commands, send heartbeats/events
+  make.go    // run llar make -v and stream stdout/stderr
+  stat.go    // collect cpu/memory/disk facts for heartbeat
+  types.go   // project-local JSON structs
+
+internal/protocol/
+  protocol.go // Encode/Decode
+  conn.go     // WebSocket JSON binding
+```
+
+The project intentionally keeps the initial agent module small. Its required
+behaviors are:
+
+```text
+1. Connect to the Scheduler over an outbound WebSocket.
+2. Report node facts through heartbeat messages.
+3. Execute Scheduler commands by running llar make -v.
+4. Stream stdout/stderr logs back to the Scheduler.
+5. Report completed or failed events.
+```
+
+Artifact fetching, packaging, and publishing can start inside `agent.go` or
+`make.go` while the flow is small. They should only become separate files after
+the code has enough real logic to justify the split.
+
+### Agent Protocol Module
+
+The service repository keeps protocol structs locally instead of sharing a Go
+package with `llar`. During MVP, both repositories define matching JSON wire
+structs. The wire contract in this spec is the source of truth.
+
+The protocol module follows the same public boundary as `multipath`: protocol
+behavior is `Encode` and `Decode`. The transport binding is a thin convenience
+wrapper for WebSocket JSON reads/writes.
+
+The WebSocket library is `github.com/coder/websocket`. It provides maintained
+context-aware WebSocket support and `wsjson` helpers that fit JSON messages.
+
+```go
+package protocol
+
+type Type string
+
+const (
+	TypeHeartbeat Type = "heartbeat"
+	TypeCommand   Type = "command"
+	TypeEvent     Type = "event"
+)
+
+type Message struct {
+	Type Type
+	Body any
+}
+
+func Encode(msg Message) (json.RawMessage, error)
+
+func Decode(data json.RawMessage) (Message, error)
+```
+
+`Encode` validates that the message type matches its concrete body. `Decode`
+first reads the envelope type, then decodes the payload into the concrete body
+for that type. Unknown message types, unknown command/event names, and mismatched
+bodies return protocol errors.
+
+The WebSocket binding stays in the same package but is not the protocol itself:
+
+```go
+type Conn struct {
+	// wraps *websocket.Conn
+}
+
+func NewConn(c *websocket.Conn) *Conn
+
+func (c *Conn) Encode(ctx context.Context, msg Message) error
+
+func (c *Conn) Decode(ctx context.Context) (Message, error)
+
+func (c *Conn) Close(code websocket.StatusCode, reason string) error
+```
+
+`Conn.Encode` calls `protocol.Encode` and writes the resulting JSON with
+`wsjson.Write`. `Conn.Decode` reads one JSON message with `wsjson.Read` and then
+calls `protocol.Decode`.
+
+Message body names stay short because the package name carries the context:
+
+```go
+type Heartbeat struct {
+	Running   int       `json:"running"`
+	Resources Resources `json:"resources"`
+}
+
+type Resources struct {
+	CPUUsage    float64 `json:"cpuUsage"`    // 0.0-1.0
+	CPUCores    int     `json:"cpuCores"`
+	MemoryUsage float64 `json:"memoryUsage"` // 0.0-1.0
+	MemoryTotal int64   `json:"memoryTotal"` // bytes
+	DiskUsage   float64 `json:"diskUsage"`   // 0.0-1.0
+}
+
+type Command struct {
+	Name string `json:"name"` // run_job
+	Body any    `json:"body"`
+}
+
+type Run struct {
+	Target   Target       `json:"target"`
+	Matrix   Matrix       `json:"matrix"`
+	Artifact ArtifactSpec `json:"artifact"`
+}
+
+type Event struct {
+	Name   string `json:"name"` // log | completed | failed
+	Target Target `json:"target,omitempty"`
+	Matrix Matrix `json:"matrix,omitempty"`
+	Data   any    `json:"data,omitempty"`
+}
+
+type Matrix struct {
+	Require        map[string][]string `json:"require"`
+	Options        map[string][]string `json:"options,omitempty"`
+	DefaultOptions map[string][]string `json:"defaultOptions,omitempty"`
+}
+```
+
+The JSON envelope remains explicit:
+
+```json
+{
+  "type": "command",
+  "name": "run_job",
+  "body": {}
+}
+```
+
 ## Edge Worker Runtime
 
 `llar-edge-worker` is a separate program from the user-facing `llar` CLI. It
