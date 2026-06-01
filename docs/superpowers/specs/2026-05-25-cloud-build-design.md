@@ -991,6 +991,10 @@ internal/agent/
 internal/stats/
   stats.go   // collect cpu/memory/disk samples
 
+internal/upload/
+  upload.go  // Uploader interface and common options
+  ghcr.go    // GHCR uploader
+
 internal/protocol/
   protocol.go // Encode/Decode and message structs
 ```
@@ -1052,9 +1056,136 @@ func Collect(ctx context.Context, interval time.Duration) <-chan Sample
 `github.com/shirou/gopsutil/v4` internally. The `agent` and `protocol` packages
 do not import `gopsutil`.
 
-Artifact fetching, packaging, and publishing can start inside `agent.go` or
-`make.go` while the flow is small. They should only become separate files after
-the code has enough real logic to justify the split.
+Artifact upload lives in `internal/upload`. MVP supports GHCR only; later
+uploaders can be added with typed constructors, not a generic factory.
+
+```go
+package upload
+
+type Options struct {
+	Name  string
+	Type  string // zip | tar.gz | tar.zst
+	Attrs map[string]string
+}
+
+type Result struct {
+	URL      string
+	Size     int64
+	Checksum string
+}
+
+type Uploader interface {
+	Type() string
+	Upload(ctx context.Context, body io.ReadSeeker, opts Options) (Result, error)
+}
+
+type GHCRConfig struct {
+	Owner string
+	Token string
+}
+
+func NewGHCR(cfg GHCRConfig) Uploader
+```
+
+`Uploader.Type()` is the artifact source type. For the MVP GHCR uploader:
+
+```text
+uploader.Type() == "ghcr"
+Artifact.Source.Type == "ghcr"
+```
+
+`Upload` owns archive byte inspection. It reads from the current `body` offset
+to EOF, computes SHA-256 and size, seeks back to the original offset, uploads
+the same bytes, and returns `Result{URL, Size, Checksum}`.
+
+For GHCR:
+
+```text
+Options.Name  = ghcr.io/<owner>/<module>:<version>
+Options.Type  = zip
+Options.Attrs = {"org.llar.matrix": "<matrixStr>"}
+Result.URL    = https://ghcr.io/v2/<owner>/<module>/blobs/sha256:<digest>
+```
+
+The agent creates the uploader from its own config. `run.Artifact.Publish.Type`
+is checked against `uploader.Type()` before upload; unsupported publish types
+fail the job before uploading.
+
+Dependency artifact fetching can start inside `agent.go` or `make.go` while the
+flow is small. It should only become a separate package after the code has
+enough real logic to justify the split.
+
+### Agent Make Execution
+
+`internal/agent/make.go` executes Scheduler `run_job` commands by invoking the
+installed `llar` binary. The agent does not import `llar/internal/build` and
+does not calculate install directories itself.
+
+MVP obtains the build artifact through `llar make -o`:
+
+```text
+llar make -v -o <tmp>/artifact.zip [matrix flags] <module>@<version>
+```
+
+Using `-o` keeps the agent outside the llar workspace/cache layout. The `llar`
+CLI remains responsible for finding the root build result and writing the output
+archive. The agent treats `<tmp>/artifact.zip` as the build output to publish.
+
+The initial artifact archive type is `zip`. Later support for `tar.gz` or
+`tar.zst` should extend `llar make -o` or add an explicit conversion step; it
+must not require the agent to inspect llar's install directory layout.
+
+Matrix flags are generated from the single-variant `protocol.Run.Matrix`:
+
+```text
+Require -> --require key=value
+Options -> --option key=value
+```
+
+Example:
+
+```text
+llar make -v \
+  --require os=linux \
+  --require arch=amd64 \
+  --option shared=false \
+  --option ssl=openssl \
+  -o <tmp>/artifact.zip \
+  pnggroup/libpng@v1.6.47
+```
+
+Rules:
+
+```text
+1. Each Require and Options key must have exactly one value.
+2. Empty keys or values fail the job before running llar make.
+3. Duplicate keys fail the job before running llar make.
+4. DefaultOptions is not passed to llar make; it is formula default metadata,
+   not an explicit build selection.
+5. The agent does not infer missing matrix values.
+```
+
+The execution helper stays private to the `agent` package:
+
+```go
+func runMake(ctx context.Context, run protocol.Run, send chan<- protocol.Message) (string, error)
+```
+
+Return value is the path to the completed archive. `runMake` streams stdout and
+stderr fragments as `event=log` messages through `send`; it does not write the
+WebSocket directly.
+
+`agent.Run` handles terminal events:
+
+```text
+1. Receive command name=run_job.
+2. Call runMake.
+3. If runMake fails, send event=failed with an HTTP-style status and message.
+4. If runMake succeeds, open the returned archive and call the configured
+   uploader.
+5. Combine upload result, archive type, and llar build metadata into Artifact.
+6. Send event=completed with the Artifact.
+```
 
 ### Agent Protocol Module
 
