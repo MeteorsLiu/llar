@@ -4,7 +4,7 @@
 
 `llar install` should obtain build artifacts from cloud build infrastructure
 instead of building on the user's machine. `llar make` remains the local build
-command and is also the build capability used by remote workers.
+command and is also the build capability used by remote agents.
 
 This design is intentionally scoped to cloud artifact orchestration. It must
 not redefine formula semantics, module loading semantics, matrix propagation,
@@ -19,17 +19,17 @@ flowchart LR
   Client["Client<br/>llar install"] -->|"POST /v1/jobs<br/>submit target + matrix"| Scheduler["Scheduler<br/>API, dedupe, queue, WS fanout"]
   Client <-->|"GET /v1/jobs/{jobID}/ws<br/>completed / failed / logs"| Scheduler
 
-  Scheduler -->|"workflow_dispatch / provider API<br/>workerID + token"| Provider["Worker Provider<br/>GitHub Actions / Kubernetes / fallback"]
-  Provider -->|"starts"| Worker["Edge Worker<br/>llar-edge-worker"]
-  Worker -->|"outbound WS<br/>heartbeat / event"| Scheduler
-  Scheduler -->|"WS command=run_job<br/>target + matrix + artifact publish"| Worker
+  Scheduler -->|"workflow_dispatch / provider API<br/>agentID + token"| Provider["Agent Provider<br/>GitHub Actions / Kubernetes / fallback"]
+  Provider -->|"starts"| Agent["Edge Agent<br/>llar-agent"]
+  Agent -->|"outbound WS<br/>heartbeat / event"| Scheduler
+  Scheduler -->|"WS command=run_job<br/>target + matrix + output publish"| Agent
 
-  Worker -->|"download dependency artifacts"| Store["Artifact Store<br/>GHCR / S3 / future backends"]
-  Worker -->|"publish completed artifact"| Store
+  Agent -->|"download dependency artifacts"| Store["Artifact Store<br/>GHCR / S3 / future backends"]
+  Agent -->|"publish completed artifact"| Store
   Store -->|"artifact URL<br/>http or ghcr blob"| Client
 
   Scheduler -.->|"artifact metadata<br/>lookup / persist"| DB["Artifacts + Jobs DB"]
-  Scheduler -.->|"state + queue dedupe"| Redis["Redis + Asynq"]
+  Scheduler -.->|"building index + queue dedupe"| Redis["Redis + Asynq"]
 ```
 
 Layered module view:
@@ -41,35 +41,35 @@ flowchart TB
     CLI["llar install"]
     SubmitAPI["POST /v1/jobs"]
     ClientWS["Client Job WS"]
-    WorkerWS["Worker Control WS"]
-    CLI ~~~ SubmitAPI ~~~ ClientWS ~~~ WorkerWS
+    AgentWS["Agent Control WS"]
+    CLI ~~~ SubmitAPI ~~~ ClientWS ~~~ AgentWS
   end
 
   subgraph SchedulerRow["Scheduler Layer"]
     direction TB
     JobAPI["Job API"]
     Dedupe["Artifact Dedupe"]
-    Queue["Provision Queue"]
-    Provisioner["Worker Provisioner"]
+    Queue["Dispatch Signal"]
+    Provisioner["Agent Provisioner"]
     Fanout["Client WS Fanout"]
-    WorkerControl["Worker Control Plane"]
-    JobAPI ~~~ Dedupe ~~~ Queue ~~~ Provisioner ~~~ Fanout ~~~ WorkerControl
+    AgentControl["Agent Control Plane"]
+    JobAPI ~~~ Dedupe ~~~ Queue ~~~ Provisioner ~~~ Fanout ~~~ AgentControl
   end
 
   subgraph ExecutionRow["Execution Layer"]
     direction TB
-    Provider["Worker Provider<br/>GitHub Actions / Kubernetes"]
-    EdgeWorker["llar-edge-worker"]
+    Provider["Agent Provider<br/>GitHub Actions / Kubernetes"]
+    EdgeAgent["llar-agent"]
     DepInstaller["Dependency Artifact Installer"]
     LocalBuild["llar make -v"]
     Publisher["Artifact Publisher"]
-    Provider ~~~ EdgeWorker ~~~ DepInstaller ~~~ LocalBuild ~~~ Publisher
+    Provider ~~~ EdgeAgent ~~~ DepInstaller ~~~ LocalBuild ~~~ Publisher
   end
 
   subgraph StateRow["State Layer"]
     direction TB
-    RedisState["Redis<br/>artifact state + Asynq"]
-    DB["DB<br/>artifacts / jobs / workers"]
+    RedisState["Redis<br/>building index + Asynq"]
+    DB["DB<br/>artifacts / jobs / agents"]
     LogRing["In-memory Log Ring"]
     RedisState ~~~ DB ~~~ LogRing
   end
@@ -91,18 +91,18 @@ flowchart TB
   the existing build order, submits each module build to the Scheduler, downloads
   artifacts, writes the local build cache, and prints the root metadata.
 - **Scheduler**: Owns the public API, artifact lookup, active-job dedupe,
-  queueing, worker provisioning, job state, and client WebSocket fanout. It can
-  provision workers through GitHub Actions, Kubernetes, or a fallback provider,
+  queueing, agent provisioning, job state, and client WebSocket fanout. It can
+  provision agents through GitHub Actions, Kubernetes, or a fallback provider,
   but it does not execute builds and does not initiate network connections to
-  workers.
-- **Edge Worker**: A provider-started `llar-edge-worker` process that executes
+  agents.
+- **Edge Agent**: A provider-started `llar-agent` process that executes
   build jobs. It starts with Scheduler connection credentials, opens an
   outbound control-plane WebSocket to the Scheduler, receives the job
   assignment, prepares dependency artifacts in its workspace, coordinates
   `llar make` as the build command, uploads the artifact, and streams logs/status
   back to the Scheduler.
-- **Artifact Store**: Stores artifact archives. Clients and workers download
-  archives from artifact URLs; workers upload completed archives. The initial
+- **Artifact Store**: Stores artifact archives. Clients and agents download
+  archives from artifact URLs; agents upload completed archives. The initial
   backend can be GHCR, with S3-compatible and future backends hidden behind the
   same abstraction.
 
@@ -111,7 +111,7 @@ flowchart TB
 `llar make` is the build command.
 
 - It can still be used locally.
-- The Edge Worker invokes `llar make` in a controlled workspace.
+- The Edge Agent invokes `llar make` in a controlled workspace.
 - Existing build cache, workspace layout, and result selection are preserved.
 
 `llar install` is the cloud artifact command.
@@ -122,7 +122,7 @@ flowchart TB
 - It downloads each remote artifact into the existing workspace layout and writes
   the existing build cache metadata so later `llar make` sees a normal cache hit.
 - It prints the root target metadata, matching `llar make`.
-- With `-v`, it streams remote worker logs while waiting for pending jobs.
+- With `-v`, it streams remote agent logs while waiting for pending jobs.
 
 ## Matrix Handling
 
@@ -218,20 +218,24 @@ Scheduler behavior:
 
 ```text
 1. Convert the request target + matrix into ArtifactKey.
-2. Read Redis artifact state.
-3. If Redis state is building(jobID):
+2. Read Redis artifact:building key.
+3. If Redis returns jobID:
    return pending + jobID.
-4. If Redis state is completed:
-   read artifacts by ArtifactKey.
-   if artifact exists, return ready + artifact.
-   if artifact is missing, delete the stale Redis state and continue.
-5. If Redis state is missing:
-   read artifacts by ArtifactKey.
-   if artifact exists, write Redis completed and return ready + artifact.
-6. Create or reuse a pending job for ArtifactKey.
-7. Write Redis building(jobID).
-8. Enqueue the Asynq provisioning task with TaskID=ArtifactKey.String().
-9. Return pending + jobID.
+4. If Redis misses, enter singleflight for ArtifactKey.
+5. Inside singleflight, read Redis artifact:building again.
+6. If Redis returns jobID:
+   return pending + jobID.
+7. If Redis still misses, read artifacts by ArtifactKey.
+8. If artifact exists, return ready + artifact.
+9. If artifact is missing, call build.Submit.
+10. build.Submit inserts or reuses a pending jobs row with
+    `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING`.
+11. build.Submit creates or restores the in-memory build runtime entry for the
+    returned jobID.
+12. build.Submit writes Redis artifact:building key to the jobID and
+    creates/reuses the Asynq task with `TaskID=ArtifactKey.String()`.
+13. Publish a Redis dispatch signal.
+14. Return pending + jobID.
 ```
 
 The internal artifact key is:
@@ -254,53 +258,56 @@ This string is used for Redis artifact state keys and Asynq task IDs. It is an
 internal representation; the public API still accepts structured target and
 matrix fields.
 
-## Redis and Asynq Dedupe
+## Redis, Asynq, and Dispatch Dedupe
 
-Redis is used for build-state dedupe, not as an artifact metadata cache. It does
-not store artifact URL, type, metadata, or checksum. The artifact database
-remains the source of truth for completed artifact metadata.
+Redis is used as the hot in-progress index, not as an artifact metadata cache.
+It does not store artifact URL, type, metadata, checksum, or completed state.
+The artifact database remains the source of truth for completed artifact
+metadata.
 
-For each artifact key, the Scheduler maintains a Redis state key:
-
-```text
-artifact:state:<ArtifactKey.String()> = building(jobID) | completed
-```
-
-State meaning:
+For each artifact key being built, the Scheduler maintains:
 
 ```text
-building
-  A job is already building this artifact key. Repeated submit requests return
-  pending + jobID without creating another job.
-
-completed
-  This artifact key was recently completed. Submit requests query the artifact
-  database and return ready + artifact when the database record exists.
-
-missing Redis key
-  Redis has no current state for this artifact key. The Scheduler queries the
-  artifact database. If the artifact exists, it restores completed state in
-  Redis and returns ready. If it does not exist, it creates a new job.
+artifact:building:<ArtifactKey.String()> = jobID
 ```
 
-The `building` state uses a short TTL tied to the maximum build/attempt timeout
-so crashed workers cannot block a key forever. The `completed` state uses a long
-TTL and may rely on Redis eviction policy to let cold artifact keys disappear.
+`artifact:building` has no TTL. A Redis hit is the intended fast path for submit
+dedupe:
 
-Completed Redis state is written only after the Scheduler has successfully
-recorded the artifact in the artifact database. If a completed Redis state is
-found but the artifact database has no matching artifact, the Scheduler treats
-the Redis state as stale, deletes it, and continues through normal job creation.
+```text
+Redis hit
+  return pending + jobID without querying the database.
 
-Asynq is used as the lightweight Redis-backed queue for worker provisioning
-tasks. Provision tasks use `ArtifactKey.String()` as their Asynq task ID, so the
-queue also dedupes repeated provisioning for the same artifact key. Asynq task
-state is not job state: a successful Asynq task only means a worker was
-provisioned, not that the build completed.
+Redis miss
+  enter singleflight for the artifact key. Inside singleflight, check Redis
+  building again, then query completed artifacts, and finally create or reuse
+  the pending build with INSERT ON CONFLICT only if both still miss.
+```
+
+The Scheduler deletes `artifact:building:<key>` after a completed or failed
+terminal event has been persisted. Completed artifacts are not written back to
+Redis; later ready responses come from the artifacts table.
+
+Asynq tasks use `ArtifactKey.String()` as their task ID so repeated dispatch
+triggers for the same artifact key can be deduped. Asynq task state is not job
+state: it is only part of the scheduling hot path and does not prove that a
+build is running or completed.
+
+The Scheduler wakes the dispatcher with Redis pub/sub. The pub/sub message is
+only a signal; the dispatcher does not trust it as job data. The durable job
+source is the jobs table, and the hot scheduling path is Redis building plus the
+Asynq task keyed by `ArtifactKey.String()`.
+
+On every signal, the dispatcher scans pending jobs with
+`current_agent_id IS NULL`, claims jobs with conditional updates, and starts or
+assigns agents. A low-frequency tick is only a fallback for missed pub/sub
+messages or Scheduler restart. The tick does not directly assign agents; it
+scans unassigned pending jobs, restores missing Redis building keys, restores
+missing Asynq tasks, and publishes a dispatch signal.
 
 ## Persistent State
 
-Persistent state exists to recover client job waits, worker reconnects, and
+Persistent state exists to recover client job waits, agent reconnects, and
 completed artifacts across Scheduler restart. Redis and Asynq are fast-path
 coordination tools, not the only source of truth.
 
@@ -328,7 +335,7 @@ CREATE TABLE artifacts (
 );
 ```
 
-Artifact rows are immutable for a given primary key. When a worker submits a
+Artifact rows are immutable for a given primary key. When an agent submits a
 completed artifact:
 
 ```text
@@ -358,7 +365,7 @@ CREATE TABLE jobs (
   version            TEXT NOT NULL,
   matrix_str         TEXT NOT NULL,
 
-  current_worker_id  TEXT NULL,
+  current_agent_id   TEXT NULL,
   state              TEXT NOT NULL, -- pending | completed | failed
 
   error_status       INTEGER NULL,
@@ -369,24 +376,25 @@ CREATE TABLE jobs (
 );
 ```
 
-`jobs.current_worker_id` points to the worker currently responsible for the job.
-It is used to validate worker log/status messages and to recover client
+`jobs.current_agent_id` points to the agent currently responsible for the job.
+It is used to validate agent log/status messages and to recover client
 subscriptions after reconnect. A job only accepts terminal status from its
-current worker.
+current agent.
 
 At most one pending job may exist for the same `module/version/matrix_str` at a
-time. The Scheduler should enforce this with a transaction or a partial unique
-index on pending jobs. Historical completed/failed jobs may remain for
-diagnostics.
+time. `build.Submit` uses insert-on-conflict/upsert semantics to create or
+reuse that pending job. The concrete database constraint used for the conflict
+target is an implementation detail and is not fixed by this design. Historical
+completed/failed jobs may remain for diagnostics.
 
-### Workers Table
+### Agents Table
 
-`workers` stores Scheduler-created worker identities. Provider IDs are external
+`agents` stores Scheduler-created agent identities. Provider IDs are external
 provider handles, not Scheduler identities.
 
 ```sql
-CREATE TABLE workers (
-  worker_id        TEXT PRIMARY KEY,
+CREATE TABLE agents (
+  agent_id         TEXT PRIMARY KEY,
 
   state            TEXT NOT NULL, -- created | connected | reconnecting | closed
 
@@ -402,29 +410,29 @@ CREATE TABLE workers (
 );
 ```
 
-`worker_id` is the Scheduler identity used for worker WebSocket registration and
+`agent_id` is the Scheduler identity used for agent WebSocket registration and
 job assignment. `provider_id` is the external ID returned by the provider, such
 as a GitHub Actions run ID, Kubernetes job/pod name, or VM instance ID.
 
-Worker reconnect validation uses `worker_id + token`, `state`, and
+Agent reconnect validation uses `agent_id + token`, `state`, and
 `disconnected_at`:
 
 ```text
 state=connected:
-  worker has an active Scheduler WebSocket
+  agent has an active Scheduler WebSocket
 
 state=reconnecting:
-  worker disconnected; it may reconnect if now - disconnected_at <= 150 seconds
+  agent disconnected; it may reconnect if now - disconnected_at <= 150 seconds
 
 state=closed:
-  worker is no longer accepted; later reconnects or results are rejected
+  agent is no longer accepted; later reconnects or results are rejected
 ```
 
-Jobs assigned to a worker are found through:
+Jobs assigned to an agent are found through:
 
 ```sql
 SELECT job_id FROM jobs
-WHERE current_worker_id = ?
+WHERE current_agent_id = ?
   AND state = 'pending';
 ```
 
@@ -456,18 +464,23 @@ ghcr
 ```
 
 The Scheduler uses the artifact store abstraction for artifact lookup and for
-publishing completed artifact metadata. The Edge Worker uses provider-specific
+publishing completed artifact metadata. The Edge Agent uses provider-specific
 upload capability supplied through that abstraction. The upload path may be a
 direct object-storage upload, a GitHub Release asset upload, GHCR OCI publish,
 or another backend-specific mechanism.
 
 Those storage details must not leak into the public job protocol. For cloud
-build orchestration, the only stable contract is:
+build orchestration, the stable public contract is the completed `Artifact`
+download description:
 
 ```text
 artifact key -> maybe completed Artifact
 completed build output -> completed Artifact
 ```
+
+Upload credentials, publish APIs, provider-specific push flows, and temporary
+upload configuration do not appear in the public job API. `Artifact.Source` is
+public because clients need it to download completed archives.
 
 `Artifact.Source.URL` must be usable by clients when `POST /v1/jobs` returns
 `status=ready` or when a job WebSocket reports `completed`. The Scheduler must
@@ -501,7 +514,7 @@ matching uses the custom annotation:
 org.llar.matrix = <MatrixStr>
 ```
 
-The worker uploads the archive blob, writes or updates the version index, and
+The agent uploads the archive blob, writes or updates the version index, and
 reports the final blob URL:
 
 ```text
@@ -511,7 +524,7 @@ https://ghcr.io/v2/<owner>/<target.module>/blobs/sha256:<digest>
 Public GHCR packages must be pre-created or made public manually before clients
 can use anonymous downloads. For public packages, clients send
 `Authorization: Bearer QQ==`. Private GHCR packages use client-local registry
-credentials. Publish credentials are provided by the worker runtime, such as
+credentials. Publish credentials are provided by the agent runtime, such as
 GitHub Actions `GITHUB_TOKEN` or provider-injected secrets; they are not sent
 through the Scheduler protocol.
 
@@ -522,7 +535,7 @@ GET /v1/jobs/{jobID}/ws?verbose=true|false
 ```
 
 The connection is bound to a single job. The Scheduler broadcasts the job's
-terminal status to all subscribers. When `verbose=true`, it also forwards worker
+terminal status to all subscribers. When `verbose=true`, it also forwards agent
 logs.
 
 The Scheduler sends two message shapes.
@@ -555,7 +568,7 @@ type LogMessage struct {
 }
 
 type LogData struct {
-	Stream string `json:"stream,omitempty"` // stdout | stderr
+	Stream string `json:"stream,omitempty"` // stderr for current agent logs
 	Text   string `json:"text"`             // UTF-8, ANSI preserved
 }
 ```
@@ -566,7 +579,7 @@ closes the connection.
 
 ### Job Log Window
 
-Worker logs are required for diagnostics, but log volume must not compete with
+Agent logs are required for diagnostics, but log volume must not compete with
 Redis queue/dedupe traffic in the initial design. The Scheduler keeps a
 best-effort in-memory log window per job.
 
@@ -577,7 +590,7 @@ capacity
   1024 log fragments per job.
 
 append
-  Each worker log fragment is appended to the job's in-memory ring buffer.
+  Each agent log fragment is appended to the job's in-memory ring buffer.
 
 eviction
   When the ring is full, the oldest fragments are dropped.
@@ -622,148 +635,104 @@ Initial status set:
   inconsistent artifact/job state for an artifact key
 
 424 Failed Dependency
-  worker cannot find a required dependency artifact
+  agent cannot find a required dependency artifact
 
 500 Internal Server Error
-  unexpected scheduler or worker error
+  unexpected scheduler or agent error
 ```
 
 Asynchronous job failures are sent over the client WebSocket as
 `StatusMessage{State: failed}` with `body.status` and `body.message`. The
 status value uses HTTP status code semantics.
 
-## Worker Control Plane
+## Agent Control Plane
 
-The Scheduler owns the queue and provisions Edge Workers. The Edge Worker is an
-execution agent. A worker may execute multiple independent jobs over its
-lifetime, but it is not a long-lived worker pool member.
+The Scheduler owns dispatch and provisions Edge Agents. The Edge Agent is an
+execution process. An agent may execute multiple independent jobs over its
+lifetime, but it is not a long-lived agent pool member.
 
-Workers are not public HTTP/WebSocket servers. The network direction is always:
-
-```text
-Edge Worker -> Scheduler
-```
-
-When the Scheduler decides to run a queued job and has no suitable active worker,
-it creates a worker identity and token, then starts a worker through the selected
-provider:
+Agents are not public HTTP/WebSocket servers. The network direction is always:
 
 ```text
-GitHub Actions workflow_dispatch: scheduler URL + worker ID + worker token as inputs
-Kubernetes Job/Pod: scheduler URL + worker ID + worker token as environment variables
-Fallback provider: equivalent worker launch metadata
+Edge Agent -> Scheduler
 ```
 
-The worker starts and opens an authenticated outbound WebSocket to the
+When the Scheduler decides to run an unassigned pending job and has no suitable
+active agent, it creates an agent identity and token, then starts an agent
+through the selected provider:
+
+```text
+GitHub Actions workflow_dispatch: scheduler URL + agent ID + agent token as inputs
+Kubernetes Job/Pod: scheduler URL + agent ID + agent token as environment variables
+Fallback provider: equivalent agent launch metadata
+```
+
+The agent starts and opens an authenticated outbound WebSocket to the
 Scheduler:
 
 ```text
-GET /v1/workers/{workerID}/ws
-Authorization: Bearer <worker_token>
+GET /v1/agents/{agentID}/ws
+Authorization: Bearer <agent_token>
 ```
 
 This is an internal control-plane endpoint. Authentication happens before the
 HTTP upgrade completes. Failed authentication returns an HTTP error and does not
 create a WebSocket. The exact URL can change, but the direction must not:
-workers connect to the Scheduler, not the other way around.
+agents connect to the Scheduler, not the other way around.
 
-After authenticating the worker ID/token, the Scheduler records the worker as
-connected. The worker periodically sends resource heartbeats. The first
+After authenticating the agent ID/token, the Scheduler records the agent as
+connected. The agent periodically sends resource heartbeats. The first
 heartbeat gates scheduling eligibility: the Scheduler must not send commands to
 a connection until it has received at least one heartbeat. Heartbeats are not an
 application-level liveness check. The Scheduler does not close a healthy TCP
 connection merely because heartbeats are late or missing; connection liveness is
 determined by TCP keepalive and WebSocket read/write errors.
 
-Worker WebSocket messages have three top-level types:
+Agent WebSocket messages have three top-level types:
 
 ```text
-heartbeat  worker -> scheduler
-command    scheduler -> worker
-event      worker -> scheduler
+heartbeat  agent -> scheduler
+command    scheduler -> agent
+event      agent -> scheduler
+ack        scheduler -> agent
 ```
 
-There is no `register` message. Successful WebSocket upgrade is worker
+There is no `register` message. Successful WebSocket upgrade is agent
 registration. There is no command ack. If a connection is lost and later
 restored inside the reconnect window, the Scheduler may re-send still-pending
-commands for the same worker.
+commands for the same agent.
 
-The Scheduler owns concurrency and lifecycle limits; workers do not choose their
-own limits. The Scheduler may send commands while the worker is eligible to
+The Scheduler owns concurrency and lifecycle limits; agents do not choose their
+own limits. The Scheduler may send commands while the agent is eligible to
 accept work.
 
-```go
-type WorkerHeartbeatMessage struct {
-	Type        string          `json:"type"` // heartbeat
-	RunningJobs int             `json:"runningJobs"`
-	Resources   WorkerResources `json:"resources"`
-}
+The concrete JSON message structs are defined once in the Agent Protocol Module
+section below. The control plane uses that `protocol.Message` envelope:
+`type=heartbeat`, `type=command` with `name=run_job`, `type=event` with
+`name=log|completed|failed`, and `type=ack` for terminal event acknowledgement.
 
-type WorkerResources struct {
-	CPUUsage    float64 `json:"cpuUsage"`    // 0.0-1.0
-	CPUCores    int     `json:"cpuCores"`
-	MemoryUsage float64 `json:"memoryUsage"` // 0.0-1.0
-	MemoryTotal int64   `json:"memoryTotal"` // bytes
-	DiskUsage   float64 `json:"diskUsage"`   // 0.0-1.0
-}
-
-type WorkerCommandMessage struct {
-	Type    string            `json:"type"`    // command
-	Command string            `json:"command"` // run_job
-	Body    RunJobCommandBody `json:"body"`
-}
-
-type RunJobCommandBody struct {
-	Target   Target         `json:"target"`
-	Matrix   formula.Matrix `json:"matrix"`
-	Artifact ArtifactSpec   `json:"artifact"`
-}
-
-type ArtifactSpec struct {
-	Type    string      `json:"type"` // zip | tar.gz | tar.zst
-	Publish PublishSpec `json:"publish"`
-}
-
-type PublishSpec struct {
-	Type   string `json:"type"`             // ghcr | s3_presigned_put | ...
-	Config any    `json:"config,omitempty"` // type-specific; omitted for ghcr
-}
-
-type WorkerEventMessage struct {
-	Type   string         `json:"type"`  // event
-	Event  string         `json:"event"` // log | completed | failed
-	Target Target         `json:"target"`
-	Matrix formula.Matrix `json:"matrix"`
-	Data   any            `json:"data"`
-}
-
-type WorkerLogEventData struct {
-	Stream string `json:"stream,omitempty"` // stdout | stderr
-	Text   string `json:"text"`             // UTF-8, ANSI preserved
-}
-
-type WorkerCompletedEventData struct {
-	Artifact Artifact `json:"artifact"`
-}
-
-type WorkerFailedEventData struct {
-	Status  int    `json:"status"`
-	Message string `json:"message"`
-}
-```
-
-Worker protocol does not expose `jobID`. Workers build artifacts identified by
-`target + matrix`. The Scheduler maps each worker event back to the pending job
+Agent protocol does not expose `jobID`. Agents build artifacts identified by
+`target + matrix`. The Scheduler maps each agent event back to the pending job
 by converting `target + matrix` into the internal ArtifactKey and selecting the
-pending job assigned to the current worker.
+pending job assigned to the current agent.
 
-`run_job` does not carry `verbose`. Edge Workers always run `llar make -v` and
-always stream stdout/stderr as `event=log`. The Scheduler stores logs in the
-per-job ring and forwards them only to client subscribers connected with
-`verbose=true`.
+Agent event handling is Scheduler glue, not `agent` package behavior. The
+`agent` package only decodes WebSocket messages and invokes registered
+callbacks. The Scheduler callback validates the current agent assignment, looks
+up the pending job, writes artifact metadata when needed, and then calls
+`Job.Log`, `Job.Complete`, or `Job.Fail`. The `agent` package must not import or
+call the `build` package.
 
-For `artifact.publish.type=ghcr`, `artifact.publish.config` is omitted. The
-worker derives the GHCR package and tag from the command:
+`run_job` does not carry `verbose`. Edge Agents always run `llar make -v` and
+stream stderr as `event=log`. Stdout is reserved for final build metadata and is
+not forwarded as log. The Scheduler stores logs in the per-job ring and forwards
+them only to client subscribers connected with `verbose=true`.
+
+The Scheduler acknowledges completed and failed events with `ack target+matrix`
+after the terminal state has been persisted. Log events are not acknowledged.
+
+For `output.publish.type=ghcr`, `output.publish.config` is omitted. The
+agent derives the GHCR package and tag from the command:
 
 ```text
 package = ghcr.io/<owner>/<target.module>
@@ -771,86 +740,114 @@ tag     = target.version
 matrix  = MatrixStr from command.matrix
 ```
 
-`owner` and publish credentials are provided by the worker runtime. For GitHub
+`owner` and publish credentials are provided by the agent runtime. For GitHub
 Actions, this normally comes from `GITHUB_REPOSITORY_OWNER`,
 `GITHUB_ACTOR`, and `GITHUB_TOKEN` with `packages: write` permission. The
 Scheduler does not receive or forward third-party publish credentials.
 
-The Scheduler stores worker logs and forwards them only to verbose client
-subscribers. Worker terminal events update the job record, update artifact
+The Scheduler stores agent logs and forwards them only to verbose client
+subscribers. Agent terminal events update the job record, update artifact
 metadata on success, fan out terminal status to clients, close client WebSockets,
-close the worker connection when the worker has no more running jobs, and
+close the agent connection when the agent has no more running jobs, and
 trigger provider cleanup when needed.
 
-Worker reuse policy:
+Agent reuse policy:
 
 ```text
 maxConcurrency
-  Scheduler-controlled. A worker may run at most this many jobs concurrently.
+  Scheduler-controlled. An agent may run at most this many jobs concurrently.
   It is bounded by CPU cores and resource headroom.
 
 maxJobs
-  Scheduler-controlled. A worker may execute at most this many jobs over its
+  Scheduler-controlled. An agent may execute at most this many jobs over its
   lifetime. The default cap is min(cpu cores, 4).
 
 busy-only reuse
-  A worker may receive a new job only while it already has at least one running
-  job. If the worker has no running jobs, it must stop accepting work and be
+  An agent may receive a new job only while it already has at least one running
+  job. If the agent has no running jobs, it must stop accepting work and be
   destroyed instead of waiting for future jobs.
 
 independent jobs only
-  Concurrent jobs on the same worker must be independent. The Scheduler must not
-  assign jobs with dependency relationships to the same worker at the same time.
+  Concurrent jobs on the same agent must be independent. The Scheduler must not
+  assign jobs with dependency relationships to the same agent at the same time.
 ```
 
-Every job assigned to a worker uses its own workspace and cache root. Completed
-job workspaces are cleaned before the worker exits. This preserves `llar`
-isolation even when a worker executes more than one job.
+Every job assigned to an agent uses its own workspace and cache root. Completed
+job workspaces are cleaned before the agent exits. This preserves `llar`
+isolation even when an agent executes more than one job.
 
-If a provisioned worker never connects or misses its reconnect window after
+If a provisioned agent never connects or misses its reconnect window after
 disconnecting before terminal status, the Scheduler keeps the original job IDs,
-treats affected worker assignments as lost, and may provision replacement
-workers. Client subscribers continue waiting on the same client WebSocket until
+treats affected agent assignments as lost, and may provision replacement
+agents. Client subscribers continue waiting on the same client WebSocket until
 each job reaches `completed` or `failed`.
 
-Worker disconnect recovery:
+Agent disconnect recovery:
 
 ```text
-1. Worker WebSocket disconnects.
-2. Scheduler marks the worker as reconnecting and starts a 150 second reconnect
-   timer.
-3. Jobs assigned to that worker stay pending and keep the same jobID.
-4. The Scheduler does not assign those jobs to another worker during the
+1. Agent WebSocket disconnects.
+2. Scheduler marks the agent as reconnecting and starts a 150 second reconnect
+   timer in the Scheduler-layer agent connection map.
+3. Jobs assigned to that agent stay pending and keep the same jobID.
+4. The Scheduler does not assign those jobs to another agent during the
    reconnect window.
 ```
 
-If the worker reconnects within 150 seconds, it reconnects with the same worker
-ID and worker token:
+The 150 second timer is owned by the Scheduler layer, not by the `agent` or
+`build` packages. The `agent` package reports `OnDisconnect` for a single
+WebSocket connection. Scheduler glue updates `agents.state`,
+`agents.disconnected_at`, and its private `agentID -> entry` map. The `build`
+package only keeps client subscribers waiting on `jobID`; it does not know
+whether the current agent is connected, reconnecting, or ready.
+
+If the agent reconnects within 150 seconds, it reconnects with the same agent
+ID and agent token:
 
 ```text
-GET /v1/workers/{workerID}/ws
-Authorization: Bearer <worker_token>
+GET /v1/agents/{agentID}/ws
+Authorization: Bearer <agent_token>
 ```
 
-The Scheduler recognizes the worker by `workerID + token`, verifies that the
-worker is still in the reconnect window, and restores the worker connection. The
-jobs remain assigned to the same worker, so later worker events for the same
+The Scheduler recognizes the agent by `agentID + token`, verifies that the
+agent is still in the reconnect window, and restores the agent connection. The
+jobs remain assigned to the same agent, so later agent events for the same
 target and matrix are mapped back to the pending jobs and fanned out to client
 subscribers exactly as before. Clients that lost their own WebSocket reconnect
 independently through `GET /v1/jobs/{jobID}/ws`; the recovery handle for
-clients is always `jobID`, not worker ID.
+clients is always `jobID`, not agent ID.
 
-If the worker does not reconnect within 150 seconds, the Scheduler reclaims it:
+If the agent does not reconnect within 150 seconds, the Scheduler reclaims it:
 
 ```text
-1. Mark the worker unavailable.
-2. Invalidate the worker token.
+1. Mark the agent closed.
+2. Invalidate the agent token.
 3. Unassign its pending jobs.
-4. Requeue those jobs for other workers, keeping the original jobIDs.
+4. Requeue those jobs for other agents, keeping the original jobIDs.
+5. Stop the provider resource through `vm.Stop` when a provider handle exists.
 ```
 
-Any later reconnect or result submission from a reclaimed worker is rejected.
-A job accepts terminal status only from its currently assigned worker.
+Any later reconnect or result submission from a reclaimed agent is rejected.
+A job accepts terminal status only from its currently assigned agent.
+
+On Scheduler startup, every persisted `connected` or `reconnecting` agent is
+treated as needing reconnect because the old WebSocket process state is gone:
+
+```text
+1. Load agents with state=connected or state=reconnecting.
+2. For state=connected, update state=reconnecting and set disconnected_at to
+   Scheduler boot time when it is missing.
+3. Rebuild private agent map entries with conn=nil and state=reconnecting.
+4. Restore pending job assignments from jobs.current_agent_id.
+5. Start each entry's remaining reconnect timer.
+```
+
+If an agent reconnects within the window, the Scheduler validates
+`agentID + token`, installs the new WebSocket connection into the existing map
+entry, waits for the first heartbeat before scheduling more work, and keeps the
+existing pending job assignments. Client WebSocket subscribers that reconnected
+through `GET /v1/jobs/{jobID}/ws` stay attached to the build fanout and receive
+later `log`, `completed`, or `failed` messages when Scheduler glue calls
+`Job.Log`, `Job.Complete`, or `Job.Fail`.
 
 ## Client Install Flow
 
@@ -880,10 +877,15 @@ It schedules modules one at a time in build order. Future concurrency can submit
 independent modules concurrently without changing the public job API.
 
 Dependency scheduling is client-owned. The Scheduler does not recursively submit
-dependency jobs. The Edge Worker resolves dependencies only to prepare its local
-build workspace; dependency artifacts are prerequisites for `run_job`. If a
-required dependency artifact is missing, the worker reports `event=failed` with
-status `424`.
+dependency jobs and `run_job` does not carry dependency metadata. The Edge Agent
+resolves dependencies itself from the assigned target and matrix, but only to
+prepare its local build workspace. Dependency artifacts are prerequisites for
+`run_job`; if a required dependency artifact is missing, the agent reports
+`event=failed` with status `424`.
+
+The Edge Agent uses llar module loading for dependency discovery:
+`modules.Load(target, matrixStr)`. It does not use a separate dependency CLI and
+does not receive dependency lists from the client or Scheduler.
 
 ### Client Implementation Interfaces
 
@@ -967,8 +969,301 @@ install directories, or write `.cache.json`.
 
 `build.Options.Verbose` controls the `WaitOptions.Verbose` value used by remote
 mode. When verbose is enabled, `build` provides an `OnLog` callback that writes
-remote stdout/stderr fragments to the same output streams used by local verbose
-builds.
+remote log fragments to the same output stream used by local verbose builds.
+
+## Scheduler Service Interfaces
+
+The Scheduler service keeps Gin resources inside the Scheduler layer. Resource
+objects are private Scheduler glue: they bind HTTP/WebSocket routes, parse
+requests, render responses, and delegate to the modules below. They are not
+part of the `job` or `build` domain packages.
+
+### Artifact Module
+
+The Scheduler-side `artifact` module owns completed artifact metadata. It does
+not upload, download, unpack, calculate checksums, manage Redis building state,
+or fan out client WebSocket messages.
+
+```go
+package artifact
+
+type Key struct {
+	Module    string
+	Version   string
+	MatrixStr string
+}
+
+func (k Key) String() string
+
+type Artifact struct {
+	Source   Source `json:"source"`
+	Type     string `json:"type"`     // zip | tar.gz | tar.zst
+	Metadata string `json:"metadata"`
+	Checksum string `json:"checksum"` // sha256
+}
+
+type Source struct {
+	Type string `json:"type"` // http | ghcr
+	URL  string `json:"url"`
+}
+
+type Store interface {
+	Get(ctx context.Context, key Key) (Artifact, bool, error)
+	Put(ctx context.Context, key Key, artifact Artifact) error
+	Delete(ctx context.Context, key Key) error
+}
+```
+
+`Put` is immutable for a key: a missing row is inserted, an existing row with
+the same checksum is idempotent success, and an existing row with a different
+checksum returns a conflict.
+
+### Build Module
+
+The Scheduler-side `build` module owns the pending build data flow: build
+runtime entries, Redis building state, Asynq dispatch task creation, client
+subscription fanout, log windows, and terminal completed/failed fanout. It does
+not own completed artifact lookup/persistence, agent WebSocket connections, VM
+startup, agent reconnect policy, dispatcher wakeup policy, or agent
+acknowledgement.
+
+```go
+package build
+
+type BuildID string
+
+type Build struct {
+	Target Target `json:"target"`
+	Matrix Matrix `json:"matrix"`
+}
+
+type Target struct {
+	Module  string `json:"module"`
+	Version string `json:"version"`
+}
+
+type Matrix struct {
+	Require        map[string][]string `json:"require"`
+	Options        map[string][]string `json:"options,omitempty"`
+	DefaultOptions map[string][]string `json:"defaultOptions,omitempty"`
+}
+
+type Builds struct {
+	// redis building index, asynq client,
+	// client subscribers, and log ring
+}
+
+func New(opts Options) *Builds
+
+func (b *Builds) Submit(ctx context.Context, req Build) (*Job, error)
+func (b *Builds) Subscribe(ctx context.Context, id BuildID, opts SubscribeOptions) error
+```
+
+`BuildID` is the Scheduler's internal type name for the public `jobID` returned
+by `POST /v1/jobs` and used by `GET /v1/jobs/{jobID}/ws`. The public HTTP field
+name remains `jobID`.
+
+`Submit` only handles the pending path. The Scheduler resource checks the
+separate `artifact.Store` before calling `Submit`; if a completed artifact
+already exists, the HTTP response is `ready` and `build.Submit` is not called.
+When the artifact is missing, `Submit` creates or reuses the pending jobs row
+with `INSERT ... ON CONFLICT ... RETURNING`, creates or restores the in-memory
+build runtime entry, writes the Redis building entry, creates or reuses the
+Asynq task, and returns the pending build handle. The Scheduler resource
+publishes the Redis dispatch signal after this pending path has been restored.
+
+`Job` is the pending build handle returned by `Submit`. It represents the same
+`Build` inside the Scheduler build runtime; it is not the agent protocol job and
+does not expose VM or agent connection details.
+
+```go
+type Job struct {
+	// internal: Builds, BuildID, Build, and artifact key
+}
+
+func (j *Job) ID() BuildID
+
+func (j *Job) Complete(ctx context.Context, artifact artifact.Artifact) error
+func (j *Job) Fail(ctx context.Context, status int, message string) error
+func (j *Job) Log(ctx context.Context, log LogData) error
+```
+
+`Complete` deletes the Redis building entry and fans out a completed status
+using the artifact passed by the caller. It does not write the artifact store;
+the Scheduler event glue writes `artifact.Store` before calling `Complete`.
+`Fail` deletes the Redis building entry and fans out a failed status. `Log`
+appends to the build log window and forwards the fragment only to verbose
+subscribers.
+
+`Subscribe` is the client WebSocket wait path. It blocks until terminal status,
+context cancellation, or writer failure:
+
+```go
+type SubscribeOptions struct {
+	Verbose bool
+	Writer  MessageWriter
+}
+
+type MessageWriter interface {
+	Write(ctx context.Context, msg Message) error
+}
+```
+
+`Subscribe` replays the current log ring when `Verbose=true`, registers the
+writer as a live subscriber, writes completed/failed status when the build
+reaches a terminal state, and then returns. The Scheduler resource wrapping
+`GET /v1/jobs/{buildID}/ws` adapts `MessageWriter` to the client WebSocket.
+
+### Submit and Artifact Race Boundary
+
+The Scheduler jobs resource handles ready-vs-pending decisions before returning
+from `POST /v1/jobs`:
+
+```text
+1. Derive artifact key from the request build.
+2. Read Redis artifact:building:<key>.
+   hit -> return pending + buildID.
+3. miss -> enter singleflight(key).
+4. Inside singleflight, read Redis artifact:building:<key> again.
+   hit -> return pending + buildID.
+5. If Redis still misses, read artifact.Store.Get(key).
+   hit -> return ready + artifact.
+6. If both still miss, call build.Submit.
+7. build.Submit inserts or reuses the pending job with INSERT ON CONFLICT
+   RETURNING and restores the pending build runtime.
+8. Publish Redis dispatch signal.
+9. Return pending + buildID.
+```
+
+`singleflight` is local to the Scheduler process and is used to collapse
+same-key submit spikes. It is not a distributed lock and does not protect
+multi-Scheduler deployments. Multi-instance scheduling can replace this local
+coordination with a Redis lock or database uniqueness strategy later.
+
+The pending jobs table has the final dedupe guarantee. The insert path uses
+insert-on-conflict/upsert semantics for the artifact key:
+
+```sql
+INSERT INTO jobs (...)
+VALUES (...)
+ON CONFLICT (...)
+DO UPDATE SET ...
+RETURNING job_id, module, version, matrix_str, current_agent_id, state;
+```
+
+Insert success returns a new job. Conflict returns the existing pending job for
+the same artifact key. The exact conflict target is left to implementation. The
+design does not require `SELECT ... FOR UPDATE` for submit dedupe.
+
+Completed events must publish the artifact before completing the build:
+
+```text
+1. artifact.Store.Put(key, artifact)
+2. build.Job.Complete(ctx, artifact)
+3. agent ack / cleanup
+```
+
+This ordering avoids a new pending build being created after an artifact has
+already completed:
+
+```text
+client enters before artifact.Put
+  Redis building hit -> pending; client subscribes normally.
+
+client enters after artifact.Put and before Job.Complete
+  Redis building still exists -> pending; client subscribes normally and will
+  receive the completed status when Job.Complete fans out.
+
+client enters after Job.Complete
+  Redis building has been deleted, so submit enters singleflight. The
+  singleflight artifact.Store.Get check hits the artifact written before
+  Job.Complete and returns ready instead of creating a new pending build.
+```
+
+The reverse ordering is not allowed. Deleting Redis building before
+`artifact.Store.Put` would create a window where submit sees both artifact miss
+and building miss and could enqueue a duplicate build.
+
+### Scheduler Failure Policy
+
+The initial Scheduler keeps internal failure handling simple:
+
+```text
+pending path partial failure
+  If the jobs row exists but restoring Redis building, creating the Asynq task,
+  or publishing the Redis dispatch signal fails, the HTTP submit request returns
+  500. The low-frequency reconcile tick may later repair the hot path from the
+  pending jobs row, but the current request does not report pending success.
+
+dispatcher or provider failure
+  If dispatcher claim, provider startup, or VM startup fails, the Scheduler logs
+  the internal error with normal service logging such as log.Printf. These
+  details do not enter the client verbose log stream or the per-job log ring.
+  The scheduler may clear current_agent_id and retry according to the dispatch
+  policy; no extra persistent error-event model is added.
+
+run_job write failure
+  Treat the failed WebSocket write as an agent disconnect and use the normal
+  150 second reconnect/reclaim flow.
+
+completed persistence failure
+  If artifact.Store.Put fails, do not call Job.Complete. A checksum conflict for
+  the same artifact key fails the job with 409.
+
+terminal duplicate or out-of-order events
+  The first valid terminal event wins. Later logs or terminal events for the
+  same job are ignored or logged with normal Scheduler service logging.
+
+ack timeout
+  There is no application-level ack timeout. A successful WebSocket write is
+  treated as delivered; write failure is a connection failure.
+```
+
+### Agent Module
+
+The Scheduler-side `agent` module represents a single connected agent
+WebSocket. It owns protocol encoding/decoding, serialized writes, and listener
+fanout for decoded messages. It does not maintain `agentID -> Agent` maps,
+authenticate route parameters, register Gin routes, track reconnect windows, or
+understand build/job semantics; those concerns stay in the Scheduler layer.
+It must not depend on the `build` or `artifact` modules.
+
+```go
+package agent
+
+type Agent struct {
+	// internal: websocket connection, write queue, listeners, and read loop
+}
+
+func (a *Agent) Write(ctx context.Context, msg protocol.Message) error
+func (a *Agent) Close(ctx context.Context, reason string) error
+func (a *Agent) Subscribe(opts SubscribeOptions) error
+
+type SubscribeOptions struct {
+	OnMessage    func(ctx context.Context, msg protocol.Message)
+	OnDisconnect func(ctx context.Context, err error)
+}
+```
+
+`Subscribe` registers a listener and returns immediately. The `Agent` read loop
+continues decoding WebSocket messages; each decoded `protocol.Message` is
+delivered to registered `OnMessage` callbacks. A WebSocket disconnect, read
+error, or close is delivered to `OnDisconnect` callbacks. If the connection is
+already closed or the options are invalid, `Subscribe` returns an error.
+
+The Scheduler layer owns the active agent map, first-heartbeat readiness,
+150-second reconnect/reclaim policy, and conversion between `build.Build` and
+`protocol.Run`. Because `build.Target`/`build.Matrix` and
+`protocol.Target`/`protocol.Matrix` use the same field layout, the Scheduler can
+bridge them with explicit Go conversions such as:
+
+```go
+run := protocol.Run{
+	Target: protocol.Target(b.Target),
+	Matrix: protocol.Matrix(b.Matrix),
+	Output: output,
+}
+```
 
 ## Edge Agent Project
 
@@ -985,7 +1280,7 @@ cmd/agent/
 
 internal/agent/
   agent.go   // connect Scheduler, read commands, send heartbeats/events
-  make.go    // run llar make -v and stream stdout/stderr
+  make.go    // run llar make -v -o and stream stderr
   types.go   // project-local JSON structs
 
 internal/stats/
@@ -1005,8 +1300,8 @@ behaviors are:
 ```text
 1. Connect to the Scheduler over an outbound WebSocket.
 2. Report node facts through heartbeat messages.
-3. Execute Scheduler commands by running llar make -v.
-4. Stream stdout/stderr logs back to the Scheduler.
+3. Execute Scheduler commands by running llar make -v -o.
+4. Stream stderr logs back to the Scheduler.
 5. Report completed or failed events.
 ```
 
@@ -1020,16 +1315,28 @@ type Config struct {
 	SchedulerURL string
 	ID           string
 	Token        string
+
+	GHCROwner string
+	GHCRToken string
 }
 
 func Run(ctx context.Context, cfg Config, samples <-chan stats.Sample) error
 ```
+
+`GHCROwner` and `GHCRToken` are agent runtime configuration, not Scheduler
+protocol fields. In GitHub Actions they are normally read from
+`GITHUB_REPOSITORY_OWNER` and `GITHUB_TOKEN`; other providers can inject
+equivalent environment variables or config.
 
 `agent.Run` consumes `stats.Sample` values, adds the current running job count,
 encodes heartbeat messages through `protocol.Encode`, and sends them through
 the Scheduler WebSocket. All WebSocket writes are serialized through one
 internal send channel so heartbeats, logs, and terminal events do not write the
 same connection concurrently.
+
+Each agent WebSocket run tracks running jobs and unacknowledged terminal events
+under one connection-level wait group, and the agent exits only after both are
+empty.
 
 Node metric collection lives in a separate package:
 
@@ -1107,7 +1414,7 @@ Options.Attrs = {"org.llar.matrix": "<matrixStr>"}
 Result.URL    = https://ghcr.io/v2/<owner>/<module>/blobs/sha256:<digest>
 ```
 
-The agent creates the uploader from its own config. `run.Artifact.Publish.Type`
+The agent creates the uploader from its own config. `run.Output.Publish.Type`
 is checked against `uploader.Type()` before upload; unsupported publish types
 fail the job before uploading.
 
@@ -1168,12 +1475,24 @@ Rules:
 The execution helper stays private to the `agent` package:
 
 ```go
-func runMake(ctx context.Context, run protocol.Run, send chan<- protocol.Message) (string, error)
+func runMake(ctx context.Context, run protocol.Run, send chan<- protocol.Message) (archive string, metadata string, err error)
 ```
 
-Return value is the path to the completed archive. `runMake` streams stdout and
+`archive` is the path to the completed archive. `metadata` is
+`strings.TrimSpace(stdout)` from the `llar make` process. `runMake` streams
 stderr fragments as `event=log` messages through `send`; it does not write the
 WebSocket directly.
+
+This relies on the `llar make` output contract:
+
+```text
+stdout = final build metadata only
+stderr = verbose/build logs and diagnostics
+```
+
+`runMake` buffers stdout until the process exits and treats the trimmed result
+as artifact metadata. It forwards stderr while the process is running. It does
+not forward stdout as logs.
 
 `agent.Run` handles terminal events:
 
@@ -1183,7 +1502,7 @@ WebSocket directly.
 3. If runMake fails, send event=failed with an HTTP-style status and message.
 4. If runMake succeeds, open the returned archive and call the configured
    uploader.
-5. Combine upload result, archive type, and llar build metadata into Artifact.
+5. Combine upload result, archive type, and runMake metadata into Artifact.
 6. Send event=completed with the Artifact.
 ```
 
@@ -1210,6 +1529,7 @@ const (
 	TypeHeartbeat Type = "heartbeat"
 	TypeCommand   Type = "command"
 	TypeEvent     Type = "event"
+	TypeAck       Type = "ack"
 )
 
 type Message struct {
@@ -1253,9 +1573,19 @@ type Command struct {
 }
 
 type Run struct {
-	Target   Target       `json:"target"`
-	Matrix   Matrix       `json:"matrix"`
-	Artifact ArtifactSpec `json:"artifact"`
+	Target Target `json:"target"`
+	Matrix Matrix `json:"matrix"`
+	Output Output `json:"output"`
+}
+
+type Output struct {
+	Type    string      `json:"type"` // zip | tar.gz | tar.zst
+	Publish PublishSpec `json:"publish"`
+}
+
+type PublishSpec struct {
+	Type   string `json:"type"`             // ghcr | s3_presigned_put | ...
+	Config any    `json:"config,omitempty"` // type-specific; omitted for ghcr
 }
 
 type Event struct {
@@ -1263,6 +1593,25 @@ type Event struct {
 	Target Target `json:"target,omitempty"`
 	Matrix Matrix `json:"matrix,omitempty"`
 	Data   any    `json:"data,omitempty"`
+}
+
+type LogData struct {
+	Stream string `json:"stream,omitempty"` // stderr
+	Text   string `json:"text"`             // UTF-8, ANSI preserved
+}
+
+type CompletedData struct {
+	Artifact Artifact `json:"artifact"`
+}
+
+type FailedData struct {
+	Status  int    `json:"status"`
+	Message string `json:"message"`
+}
+
+type Ack struct {
+	Target Target `json:"target"`
+	Matrix Matrix `json:"matrix"`
 }
 
 type Matrix struct {
@@ -1282,42 +1631,44 @@ The JSON envelope remains explicit:
 }
 ```
 
-## Edge Worker Runtime
+## Edge Agent Runtime
 
-`llar-edge-worker` is a separate program from the user-facing `llar` CLI. It
+`llar-agent` is a separate program from the user-facing `llar` CLI. It
 owns Scheduler connectivity and cloud coordination. `llar make` remains a
 protocol-free local build command and must not know about Scheduler URLs,
-worker tokens, job IDs, WebSockets, provider selection, or artifact publishing.
+agent tokens, job IDs, WebSockets, provider selection, or artifact publishing.
 
-Each `llar-edge-worker` process can execute multiple independent targets within
+Each `llar-agent` process can execute multiple independent targets within
 its lifetime, subject to Scheduler-controlled `maxConcurrency`, `maxJobs`, and
 the busy-only reuse policy. The initial implementation may set
-`maxConcurrency=1`, but the protocol does not require one worker per job.
+`maxConcurrency=1`, but the protocol does not require one agent per job.
 
 ```text
-1. Start with Scheduler URL, worker ID, and worker token from the worker provider.
-2. Open the outbound worker WebSocket to the Scheduler.
-3. Send worker heartbeats with resource facts.
+1. Start with Scheduler URL, agent ID, and agent token from the agent provider.
+2. Open the outbound agent WebSocket to the Scheduler.
+3. Send agent heartbeats with resource facts.
 4. Receive `command=run_job` from the Scheduler.
 5. Prepare an isolated per-job workspace.
-6. Resolve the target enough to identify direct dependency artifacts required by
-   this build.
+6. Derive matrixStr from the assigned matrix and run `modules.Load(target,
+   matrixStr)` to identify direct dependency artifacts required by this build.
+   These dependencies are not provided by the Scheduler command.
 7. For each required dependency artifact:
    a. Require its artifact to exist in the artifact store.
-   b. Download it into the worker workspace installDir.
+   b. Download it into the agent workspace installDir.
    c. Write dependency cache metadata using the existing build cache format.
-8. Execute `llar make -v <module>@<version>` with the assigned matrix and
-   workspace.
-9. Stream child process stdout/stderr to the Scheduler as worker log messages.
-10. If `llar make` exits non-zero, report failed with the mapped status/message.
-11. If `llar make` succeeds, locate the target installDir in the workspace.
-12. Package installDir contents as an artifact archive.
-13. Upload the archive through the artifact store abstraction.
-14. Report completed with Artifact{Source, Type, Metadata, Checksum}.
-15. If no jobs remain running, stop accepting new work and exit.
+8. Execute `llar make -v -o <tmp>/artifact.zip <module>@<version>` with the
+   assigned matrix and workspace.
+9. Stream child process stderr to the Scheduler as agent log messages.
+10. Buffer child process stdout and treat the trimmed result as build metadata.
+11. If `llar make` exits non-zero, report failed with the mapped status/message.
+12. If `llar make` succeeds, upload `<tmp>/artifact.zip` through the configured
+   uploader.
+13. Report completed with Artifact{Source, Type, Metadata, Checksum}.
+14. If no jobs remain running, stop accepting new work and exit.
 ```
 
-The artifact archive contains the install directory contents only:
+The artifact archive is produced by `llar make -o`. It contains the install
+directory contents only:
 
 ```text
 include/...
@@ -1325,12 +1676,12 @@ lib/...
 ```
 
 It does not contain a wrapper directory and does not contain `.cache.json`.
-Cache metadata is materialized by the client or worker when the artifact is
+Cache metadata is materialized by the client or agent when the artifact is
 installed into a workspace.
 
-If a dependency artifact is missing, the worker reports failed with status
+If a dependency artifact is missing, the agent reports failed with status
 `424`. Official clients should not hit this path when they submit modules in
-build order, but the worker still validates dependencies to handle manual API
+build order, but the agent still validates dependencies to handle manual API
 calls, artifact expiry, and race conditions.
 
 ## Non-Goals
@@ -1339,21 +1690,21 @@ calls, artifact expiry, and race conditions.
 - Do not change `modules.Load` semantics.
 - Do not change `build.Builder` ordering, cache-hit behavior, or result
   selection.
-- Do not put Scheduler protocol, worker token handling, WebSocket handling, or
+- Do not put Scheduler protocol, agent token handling, WebSocket handling, or
   artifact publishing into `llar make`.
 - Do not add `sourceHash`, `formulaHash`, or lock-file based reproducibility in
   this design.
-- Do not make Edge Workers public API servers. Workers are internal build
+- Do not make Edge Agents public API servers. Agents are internal build
   executors that call back to the Scheduler over outbound connections.
 
 ## Open Questions
 
-- Exact worker provider priority and fallback policy: GitHub Actions first,
+- Exact agent provider priority and fallback policy: GitHub Actions first,
   Kubernetes capacity, or other providers.
 - Exact Kubernetes resource model: Job vs Pod, timeout, and cleanup.
-- Worker token format, lifetime, rotation, and retry behavior.
-- Worker authentication with the Scheduler and artifact store.
+- Agent token format, lifetime, rotation, and retry behavior.
+- Agent authentication with the Scheduler and artifact store.
 - Client authentication with the Scheduler.
 - Artifact retention, eviction, and metadata persistence.
-- Whether future install concurrency should use DAG layers or a bounded worker
+- Whether future install concurrency should use DAG layers or a bounded client
   pool on the client side.
