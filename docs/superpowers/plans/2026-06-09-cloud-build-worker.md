@@ -587,7 +587,7 @@ git commit -m "feat: execute llar make from worker"
 - Modify: `cloud-build-worker/cmd/worker/main.go`
 - Modify: `cloud-build-worker/cmd/worker/main_test.go`
 
-- [ ] **Step 1: Expand HTTP tests**
+- [x] **Step 1: Expand HTTP tests**
 
 Add tests:
 
@@ -601,13 +601,13 @@ func TestPostJobsConflictReturnsFailedStatus409(t *testing.T)
 
 The verbose test decodes multiple JSON values with `json.Decoder`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd cloud-build-worker && go test ./cmd/worker`
 
 Expected: FAIL for the new behavior.
 
-- [ ] **Step 3: Wire real build package**
+- [x] **Step 3: Wire real build package**
 
 Update `main.go` so HTTP glue calls `internal/build.Builds`. Keep JSON encoding at HTTP boundary:
 
@@ -618,13 +618,13 @@ verbose=1 -> zero or more log JSON values, then one status JSON value
 
 Build errors return status messages, not HTTP 500, except request parsing errors.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cd cloud-build-worker && go test ./cmd/worker`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cloud-build-worker/cmd/worker

@@ -2,14 +2,21 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/goplus/llar/cloud-build-worker/internal/artifact"
+	"github.com/goplus/llar/cloud-build-worker/internal/build"
+	"github.com/goplus/llar/cloud-build-worker/internal/upload"
+	_ "modernc.org/sqlite"
 )
 
 const targetHeader = "X-LLAR-Target"
@@ -41,29 +48,38 @@ type statusBody struct {
 	Message  string             `json:"message,omitempty"`
 }
 
-type buildRequest struct {
-	Target    target
-	MatrixStr string
-	Matrix    matrix
+type logMessage struct {
+	Type string  `json:"type"`
+	Data logData `json:"data"`
 }
 
-type buildResult struct {
-	Artifact artifact.Artifact
+type logData struct {
+	Stream string `json:"stream,omitempty"`
+	Text   string `json:"text"`
 }
 
 type builds interface {
-	Build(context.Context, buildRequest, io.Writer) (buildResult, error)
-}
-
-type stubBuilds struct{}
-
-func (stubBuilds) Build(context.Context, buildRequest, io.Writer) (buildResult, error) {
-	return buildResult{}, errors.New("build backend not configured")
+	Build(context.Context, build.Request, io.Writer) (build.Result, error)
 }
 
 func main() {
-	if err := routes(stubBuilds{}).Run(); err != nil {
-		panic(err)
+	db, err := sql.Open("sqlite", "artifacts.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	artifacts, err := artifact.NewSQLStore(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	builds := build.New(build.Options{
+		Artifacts: artifacts,
+		Uploader:  upload.NewGHCR(upload.GHCRConfig{}),
+		Runner:    build.NewSubprocessRunner(),
+	})
+	if err := routes(builds).Run(); err != nil {
+		log.Fatal(err)
 	}
 }
 
@@ -88,16 +104,67 @@ func routes(builds builds) *gin.Engine {
 			return
 		}
 		var body jobRequest
-		if err := c.ShouldBindJSON(&body); err != nil || len(body.Matrix.Require) == 0 {
+		if err := c.ShouldBindJSON(&body); err != nil || matrixEmpty(body.Matrix) {
 			c.Status(http.StatusBadRequest)
 			return
 		}
-		result, err := builds.Build(c.Request.Context(), buildRequest{Target: t, MatrixStr: t.MatrixStr, Matrix: body.Matrix}, nil)
+		var log io.Writer
+		if c.Query("verbose") == "1" {
+			c.Header("Content-Type", "application/json")
+			log = newVerboseWriter(c.Writer)
+		}
+		result, err := builds.Build(c.Request.Context(), build.Request{
+			Target:    build.Target{Module: t.Module, Version: t.Version},
+			MatrixStr: t.MatrixStr,
+			Matrix: build.Matrix{
+				Require: body.Matrix.Require,
+				Options: body.Matrix.Options,
+			},
+		}, log)
 		if err != nil {
-			c.JSON(http.StatusOK, statusMessage{Type: "status", State: "failed", Body: statusBody{Status: 500, Message: err.Error()}})
+			c.JSON(http.StatusOK, failedStatus(err))
 			return
 		}
 		c.JSON(http.StatusOK, statusMessage{Type: "status", State: "completed", Body: statusBody{Artifact: &result.Artifact}})
 	})
 	return r
+}
+
+func matrixEmpty(matrix matrix) bool {
+	return len(matrix.Require) == 0 && len(matrix.Options) == 0
+}
+
+func failedStatus(err error) statusMessage {
+	status := http.StatusInternalServerError
+	if errors.Is(err, artifact.ErrConflict) {
+		status = http.StatusConflict
+	}
+	return statusMessage{
+		Type:  "status",
+		State: "failed",
+		Body:  statusBody{Status: status, Message: err.Error()},
+	}
+}
+
+type verboseWriter struct {
+	writer gin.ResponseWriter
+	enc    *json.Encoder
+	mu     sync.Mutex
+}
+
+func newVerboseWriter(writer gin.ResponseWriter) *verboseWriter {
+	return &verboseWriter{writer: writer, enc: json.NewEncoder(writer)}
+}
+
+func (w *verboseWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.enc.Encode(logMessage{
+		Type: "log",
+		Data: logData{Stream: "stderr", Text: string(p)},
+	}); err != nil {
+		return 0, err
+	}
+	w.writer.Flush()
+	return len(p), nil
 }
