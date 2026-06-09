@@ -169,3 +169,38 @@ func TestParseMatrixArgsInvalidMatrixKeyFails(t *testing.T) {
 		t.Fatal("parseMatrixArgs error = nil, want invalid matrix key error")
 	}
 }
+
+func TestParseMatrixSelectionArgsReturnsBodyMatrix(t *testing.T) {
+	gotArgs, selection, matrixStr, err := parseMatrixSelectionArgs([]string{"madler/zlib@v1.3.1", "--arch", "amd64", "--os", "linux", "--matrix-debug=false"}, emptyMatrixFlagSet())
+	if err != nil {
+		t.Fatalf("parseMatrixSelectionArgs: %v", err)
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != "madler/zlib@v1.3.1" {
+		t.Fatalf("args = %#v, want module arg only", gotArgs)
+	}
+	if matrixStr != "amd64-linux|false" {
+		t.Fatalf("matrixStr = %q, want amd64-linux|false", matrixStr)
+	}
+	if selection.Require["arch"] != "amd64" || selection.Require["os"] != "linux" {
+		t.Fatalf("require = %+v", selection.Require)
+	}
+	if selection.Options["debug"] != "false" {
+		t.Fatalf("options = %+v", selection.Options)
+	}
+}
+
+func TestParseMatrixSelectionArgsNoMatrixUsesHostSelection(t *testing.T) {
+	_, selection, matrixStr, err := parseMatrixSelectionArgs([]string{"madler/zlib@v1.3.1"}, emptyMatrixFlagSet())
+	if err != nil {
+		t.Fatalf("parseMatrixSelectionArgs: %v", err)
+	}
+	if matrixStr != runtime.GOARCH+"-"+runtime.GOOS {
+		t.Fatalf("matrixStr = %q, want host matrix", matrixStr)
+	}
+	if selection.Require["arch"] != runtime.GOARCH || selection.Require["os"] != runtime.GOOS {
+		t.Fatalf("require = %+v, want host selection", selection.Require)
+	}
+	if len(selection.Options) != 0 {
+		t.Fatalf("options = %+v, want empty", selection.Options)
+	}
+}

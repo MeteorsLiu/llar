@@ -3,15 +3,47 @@ package internal
 import (
 	"fmt"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
+	"github.com/goplus/llar/formula"
 	"github.com/spf13/pflag"
 )
 
 var matrixKeyRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
 func parseMatrixArgs(args []string, flags *pflag.FlagSet) ([]string, string, error) {
+	gotArgs, matrix, err := parseMatrixValues(args, flags)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(matrix) == 0 {
+		return gotArgs, hostMatrixCombo(), nil
+	}
+	matrixStr, err := encodeMatrix(matrix)
+	if err != nil {
+		return nil, "", err
+	}
+	return gotArgs, matrixStr, nil
+}
+
+type selectedMatrix struct {
+	Require map[string]string `json:"require"`
+	Options map[string]string `json:"options,omitempty"`
+}
+
+func parseMatrixSelectionArgs(args []string, flags *pflag.FlagSet) ([]string, selectedMatrix, string, error) {
+	gotArgs, values, err := parseMatrixValues(args, flags)
+	if err != nil {
+		return nil, selectedMatrix{}, "", err
+	}
+	selection := selectMatrix(values)
+	matrixStr := selectedMatrixStr(selection)
+	return gotArgs, selection, matrixStr, nil
+}
+
+func parseMatrixValues(args []string, flags *pflag.FlagSet) ([]string, map[string]string, error) {
 	matrixFlags := map[string]matrixFlagDef{}
 	parseFlags := true
 
@@ -29,15 +61,15 @@ func parseMatrixArgs(args []string, flags *pflag.FlagSet) ([]string, string, err
 		if strings.HasPrefix(arg, "--") {
 			key, _, _, err := splitLongFlag(arg)
 			if err != nil {
-				return nil, "", err
+				return nil, nil, err
 			}
 			if strings.HasPrefix(key, "matrix-") {
 				matrixKey := strings.TrimPrefix(key, "matrix-")
 				if matrixKey == "" {
-					return nil, "", fmt.Errorf("missing matrix key in --matrix-")
+					return nil, nil, fmt.Errorf("missing matrix key in --matrix-")
 				}
 				if !validMatrixKey(matrixKey) {
-					return nil, "", fmt.Errorf("invalid matrix key %q", matrixKey)
+					return nil, nil, fmt.Errorf("invalid matrix key %q", matrixKey)
 				}
 				matrixFlags[key] = ensureMatrixFlag(flags, key, matrixKey)
 				continue
@@ -49,35 +81,28 @@ func parseMatrixArgs(args []string, flags *pflag.FlagSet) ([]string, string, err
 				continue
 			}
 			if !validMatrixKey(key) {
-				return nil, "", fmt.Errorf("invalid matrix key %q", key)
+				return nil, nil, fmt.Errorf("invalid matrix key %q", key)
 			}
 			matrixFlags[key] = ensureMatrixFlag(flags, key, key)
 			continue
 		}
 		key := strings.TrimPrefix(arg, "-")
 		if len(key) != 1 {
-			return nil, "", fmt.Errorf("unknown short flag %q", arg)
+			return nil, nil, fmt.Errorf("unknown short flag %q", arg)
 		}
 		if flags.ShorthandLookup(key) != nil {
 			continue
 		}
-		return nil, "", fmt.Errorf("unknown short flag %q", arg)
+		return nil, nil, fmt.Errorf("unknown short flag %q", arg)
 	}
 
 	resetMatrixFlags(flags)
 	if err := flags.Parse(args); err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 
 	matrix := parsedMatrixValues(flags, matrixFlags)
-	if len(matrix) == 0 {
-		return flags.Args(), hostMatrixCombo(), nil
-	}
-	matrixStr, err := encodeMatrix(matrix)
-	if err != nil {
-		return nil, "", err
-	}
-	return flags.Args(), matrixStr, nil
+	return flags.Args(), matrix, nil
 }
 
 const matrixFlagAnnotation = "llar.matrix"
@@ -156,6 +181,38 @@ func splitLongFlag(arg string) (key, value string, hasValue bool, err error) {
 
 func validMatrixKey(key string) bool {
 	return matrixKeyRE.MatchString(key)
+}
+
+func selectMatrix(values map[string]string) selectedMatrix {
+	require := map[string]string{}
+	options := map[string]string{}
+	for key, value := range values {
+		switch key {
+		case "arch", "os":
+			require[key] = value
+		default:
+			options[key] = value
+		}
+	}
+	if len(require) == 0 && len(options) == 0 {
+		require["arch"] = runtime.GOARCH
+		require["os"] = runtime.GOOS
+	}
+	return selectedMatrix{Require: require, Options: options}
+}
+
+func selectedMatrixStr(selection selectedMatrix) string {
+	matrix := formula.Matrix{
+		Require: map[string][]string{},
+		Options: map[string][]string{},
+	}
+	for key, value := range selection.Require {
+		matrix.Require[key] = []string{value}
+	}
+	for key, value := range selection.Options {
+		matrix.Options[key] = []string{value}
+	}
+	return matrix.Combinations()[0]
 }
 
 func encodeMatrix(matrix map[string]string) (string, error) {

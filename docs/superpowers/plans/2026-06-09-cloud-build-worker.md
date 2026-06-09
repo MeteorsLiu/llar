@@ -637,7 +637,7 @@ git commit -m "feat: serve worker job endpoint"
 - Modify: `cmd/llar/internal/matrix_flags.go`
 - Modify: `cmd/llar/internal/matrix_flags_test.go`
 
-- [ ] **Step 1: Write selected matrix tests**
+- [x] **Step 1: Write selected matrix tests**
 
 Add tests for `parseMatrixSelectionArgs` that assert:
 
@@ -648,23 +648,23 @@ body matrix require = {"arch":"amd64","os":"linux"}
 body matrix options = {"debug":"false"}
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/llar/internal -run Matrix`
 
 Expected: FAIL because selected matrix output is missing and existing option matrix string uses `key=value`.
 
-- [ ] **Step 3: Implement selected matrix output**
+- [x] **Step 3: Implement selected matrix output**
 
 Add an unexported `selectedMatrix` type in `cmd/llar/internal/matrix_flags.go`. `parseMatrixArgs` remains available for `llar make`; `parseMatrixSelectionArgs` returns args, selected matrix, and matrixStr. Generate matrixStr through `formula.Matrix.Combinations()[0]`, with `arch` and `os` in Require and all other matrix flags in Options.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/llar/internal -run Matrix`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/llar/internal/matrix_flags.go cmd/llar/internal/matrix_flags_test.go
