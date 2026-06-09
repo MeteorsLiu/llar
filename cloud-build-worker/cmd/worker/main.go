@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,6 +55,18 @@ type builds interface {
 	Build(context.Context, buildRequest, io.Writer) (buildResult, error)
 }
 
+type stubBuilds struct{}
+
+func (stubBuilds) Build(context.Context, buildRequest, io.Writer) (buildResult, error) {
+	return buildResult{}, errors.New("build backend not configured")
+}
+
+func main() {
+	if err := routes(stubBuilds{}).Run(); err != nil {
+		panic(err)
+	}
+}
+
 func parseTargetHeader(value string) (target, error) {
 	beforeMatrix, matrixStr, ok := strings.Cut(value, "#")
 	if !ok || matrixStr == "" {
@@ -67,7 +80,6 @@ func parseTargetHeader(value string) (target, error) {
 }
 
 func routes(builds builds) *gin.Engine {
-	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.POST("/v1/jobs", func(c *gin.Context) {
 		t, err := parseTargetHeader(c.GetHeader(targetHeader))

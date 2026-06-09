@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 type fakeBuilds struct{}
@@ -16,6 +18,7 @@ func (fakeBuilds) Build(context.Context, buildRequest, io.Writer) (buildResult, 
 }
 
 func TestPostJobsMissingTargetReturns400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
 	r := routes(fakeBuilds{})
 	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", strings.NewReader(`{"matrix":{"require":{"arch":"amd64","os":"linux"}}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -27,6 +30,7 @@ func TestPostJobsMissingTargetReturns400(t *testing.T) {
 }
 
 func TestPostJobsInvalidTargetReturns400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
 	r := routes(fakeBuilds{})
 	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", strings.NewReader(`{"matrix":{"require":{"arch":"amd64","os":"linux"}}}`))
 	req.Header.Set("Content-Type", "application/json")
