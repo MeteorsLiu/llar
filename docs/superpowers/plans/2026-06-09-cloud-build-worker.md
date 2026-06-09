@@ -535,23 +535,23 @@ git commit -m "feat: coordinate worker local builds"
 - Create: `cloud-build-worker/internal/build/runner.go`
 - Create: `cloud-build-worker/internal/build/runner_test.go`
 
-- [ ] **Step 1: Write runner tests**
+- [x] **Step 1: Write runner tests**
 
-Create `cloud-build-worker/internal/build/runner_test.go` with a fake `llar` executable on `PATH`. The fake executable must verify it receives:
+Create `cloud-build-worker/internal/build/runner_test.go` with the real repository `llar` binary on `PATH`. The runner test uses `madler/zlib@v1.3.1` and verifies the worker invokes:
 
 ```text
 llar make -v -o <archive> <module>@<version>
 ```
 
-It writes log text to stderr, metadata to stdout, and writes a valid archive file at the `-o` path. The test asserts `RunResult.Type == "zip"`, metadata is stdout, stderr reaches the provided log writer, and `Archive` is seekable.
+The test asserts `RunResult.Type == "zip"`, metadata is the final LLAR metadata line, verbose output reaches the provided log writer, and `Archive` is seekable.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd cloud-build-worker && go test ./internal/build -run Runner`
 
 Expected: FAIL because runner is missing.
 
-- [ ] **Step 3: Implement subprocess runner**
+- [x] **Step 3: Implement subprocess runner**
 
 Create `cloud-build-worker/internal/build/runner.go`. It executes:
 
@@ -566,15 +566,15 @@ require arch/os -> --arch / --os
 options -> --matrix-<key> <value>
 ```
 
-It sends stderr to the optional raw log writer, captures stdout as LLAR metadata, opens the generated archive as `io.ReadSeeker`, and returns `RunResult{Archive, Type: "zip", Metadata}`.
+It sends stderr to the optional raw log writer, treats the final stdout line as LLAR metadata, forwards earlier verbose stdout as raw log text, opens the generated archive as `io.ReadSeeker`, and returns `RunResult{Archive, Type: "zip", Metadata}`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cd cloud-build-worker && go test ./internal/build -run Runner`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cloud-build-worker/internal/build/runner.go cloud-build-worker/internal/build/runner_test.go
