@@ -1,4 +1,4 @@
-# llar Cloud Build Worker Architecture
+# llar Cloud Build llard Architecture
 
 ## Background
 
@@ -6,49 +6,52 @@ LLAR is a cloud-based multi-language package manager built with XGo. It manages 
 
 `llar make` is the existing build command. It resolves the requested module, loads formulas, resolves dependencies, builds dependencies before dependents, runs formula build hooks, and records build results in LLAR's local cache.
 
-`llar install` adds a prebuilt artifact path for the same package manager. It installs a completed artifact when one exists and delegates artifact production to cloud build when the artifact is missing. LLAR keeps ownership of module resolution, matrix selection, dependency order, local install directories, `.cache.json`, and final metadata.
+`llar install` adds a prebuilt artifact path for the same package manager. In the `llard` design, the client is only a protocol wrapper: it sends one artifact request for one `module@version` plus matrix selection, consumes the command JSON line response stream, downloads the returned artifact set, and writes local install directories and `.cache.json` entries.
 
-Cloud build is the remote cache-miss path:
+Dependency resolution, dependency artifact reuse, and dependency artifact return move to the llard-side LLAR build path. `llard` runs `llar make`; Builder resolves dependencies, checks local cache, checks artifact metadata, downloads dependency artifacts when available, and builds missing dependencies locally when needed.
+
+Cloud build is the remote artifact path:
 
 ```text
 llar make
 cache miss -> build locally
 
 llar install
-cache miss -> ask cloud-build-worker for an artifact
+request -> llard -> artifact or error
 ```
 
-A worker is an HTTP server for one artifact request path. The same `POST /v1/jobs` endpoint performs artifact lookup, waits for an active local build when one exists, or starts a new local build when the artifact is missing.
+`llard` is an HTTP server for one artifact request path. `GET /v1/artifacts/<module>@<version>?<matrix query>` performs artifact lookup, waits for an active local build when one exists, or starts a new local build when the artifact is missing.
 
 ## Goal
 
-The goal is to implement remote artifact lookup, remote artifact production, and direct artifact download for `llar install`.
+The goal is to implement remote artifact lookup, remote artifact production, direct artifact download for `llar install`, and llard-side dependency artifact return/reuse.
 
 The architecture provides:
 
-- completed artifact lookup before remote build execution;
-- remote build execution for missing artifacts;
-- hash-affine routing by `module/version/matrixStr`;
-- optional verbose log streaming through the same HTTP response;
-- worker-local in-progress coordination;
+- one request per requested root artifact;
+- hash-affine routing by module, version, and matrix query;
+- command JSON line streaming through the same HTTP response;
+- llard-local in-progress coordination;
+- Builder-owned dependency resolution, dependency artifact lookup, and dependency artifact return;
 - persistent storage for completed artifact metadata and artifact bytes;
-- separate ownership for LLAR install semantics, build coordination, artifact metadata, and artifact upload.
+- canonical completed artifact selection through `artifact.Store.Put`.
 
-The runtime model is a worker model behind nginx hash routing. In-progress build state is memory-local to a worker. Completed metadata is stored in the artifact database. Artifact bytes are stored in the Artifact Store. GHCR is the default Artifact Store backend.
+The runtime model is a llard model behind nginx hash routing. In-progress build state is memory-local to a llard. Completed metadata is stored in the artifact database. Artifact bytes are stored in the Artifact Store. GHCR is the default Artifact Store backend.
 
 ## Concepts
 
 | Concept | Meaning |
 | --- | --- |
-| GHCR | GitHub Container Registry. GHCR is the default backend for the Artifact Store, not a hard dependency of the worker architecture. |
-| Artifact | A completed LLAR build result for one `module/version/matrixStr`. It describes where the archive can be downloaded, what archive type it is, the LLAR metadata captured from the build, and the checksum used by clients before installation. |
-| Worker | The cloud build server behind nginx hash routing. A worker handles the single `POST /v1/jobs` request path, shares in-progress work within the process, runs remote builds for cache misses, uploads archives through the configured Artifact Store backend, and records completed artifact metadata. |
+| GHCR | GitHub Container Registry. GHCR is the default backend for the Artifact Store, not a hard dependency of the llard architecture. |
+| Artifact | A completed LLAR build result for one module, version, and matrix. It describes where the archive can be downloaded, what archive type it is, the LLAR metadata captured from the build, and the checksum used by clients before installation. |
+| llard | The cloud build service behind nginx hash routing. A llard handles `GET /v1/artifacts/<module>@<version>?<matrix query>`, shares in-progress work within the process, runs remote builds for cache misses, uploads archives, and records completed artifact metadata. |
+| Builder cloud mode | The llard-side `llar make` mode that resolves dependencies and uses artifact metadata as an additional cache source before local builds. |
 
 ## Data Flow Architecture
 
-The runtime has one client request path. nginx provides cross-worker routing. Worker owns HTTP handling, local build coordination, artifact metadata access, and upload orchestration. The artifact DB stores completed metadata. The Artifact Store stores archive bytes; GHCR is the default backend.
+The runtime has one client request path. nginx provides cross-llard routing. `llard` owns HTTP handling, local build coordination, artifact metadata access, and upload orchestration. The artifact DB stores completed metadata. The Artifact Store stores archive bytes; GHCR is the default backend.
 
-<img width="2048" height="1152" alt="Image" src="https://github.com/user-attachments/assets/4d11cf68-bb71-4913-973f-9a2aa6c0a84a" />
+<img width="2048" height="1152" alt="Image" src="https://github.com/user-attachments/assets/58a0638f-a81b-42ad-abb1-d7df047094e7" />
 
 Completed artifact lookup always happens before local building-entry lookup. After `artifact.Put` succeeds, the local entry serves requests that were already waiting. New requests resolve through completed artifact metadata in the artifact DB.
 
@@ -59,135 +62,123 @@ Completed artifact lookup always happens before local building-entry lookup. Aft
 Cloud build has one public build endpoint:
 
 ```http
-POST /v1/jobs
-POST /v1/jobs?verbose=1
+GET /v1/artifacts/<module>@<version>?<matrix query>
 ```
 
-Required headers:
+Examples:
 
 ```http
-X-LLAR-Target: <module>@<version>#<matrixStr>
-Content-Type: application/json
+GET /v1/artifacts/madler/zlib@v1.3.1?arch=amd64&os=linux
+GET /v1/artifacts/pnggroup/libpng@v1.6.47?arch=amd64&os=linux&debug=false
 ```
 
-`X-LLAR-Target` is both the nginx routing key and the artifact identity used by the worker.
+The path carries module and version. The query string carries selected matrix values in the same natural shape as the LLAR matrix CLI: `key=value`. It is not a serialized `formula.Matrix` value and it does not expose `Require` or `Options` in the wire protocol. The exact mapping from these values to LLAR's internal matrix representation is owned by the LLAR build path. The artifact key remains `module + version + matrixStr`, where `matrixStr` is the canonical LLAR matrix string for the selected values. Query parameter order must not change the artifact key.
 
-Request body:
+### Response
+
+Response headers:
+
+```http
+Content-Type: application/x-cmdjsonl
+```
+
+The response body uses the [`cmdjsonl`](https://github.com/qiniu/x/blob/main/cmdjsonl/README.md) format.
+
+Supported commands are `info`, `artifact`, and `error`.
+
+```go
+type Info struct {
+	Stream string `json:"stream,omitempty"`
+	Text   string `json:"text"`
+}
+
+type ArtifactSet struct {
+	Artifacts []TargetArtifact `json:"artifacts"`
+}
+
+type TargetArtifact struct {
+	Target   string   `json:"target"` // module@version
+	Artifact Artifact `json:"artifact"`
+}
+
+type Artifact struct {
+	Source   ArtifactSource `json:"source"`
+	Type     string         `json:"type"`     // zip | tar.gz | tar.zst
+	Metadata string         `json:"metadata"` // LLAR build metadata, for example -lz
+	Checksum string         `json:"checksum"` // sha256
+}
+
+type ArtifactSource struct {
+	Type string `json:"type"` // artifact backend, for example ghcr
+	URL  string `json:"url"`
+}
+
+type Error struct {
+	Message string `json:"message"`
+}
+```
+
+`ArtifactSet.Artifacts` is ordered for installation: dependencies first, the requested root artifact last. Each returned artifact uses the matrix selection from the request. The client combines each `target` with the request matrix to calculate the local install directory and `.cache.json` key.
+
+Info message body:
 
 ```json
 {
-  "matrix": {
-    "require": {
-      "arch": "amd64",
-      "os": "linux"
+  "stream": "stderr",
+  "text": "checking..."
+}
+```
+
+Artifact message body:
+
+```json
+{
+  "artifacts": [
+    {
+      "target": "madler/zlib@v1.3.1",
+      "artifact": {
+        "source": {
+          "type": "ghcr",
+          "url": "https://ghcr.io/v2/llar-artifacts/madler/zlib/blobs/sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        },
+        "type": "zip",
+        "metadata": "-lz",
+        "checksum": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+      }
     },
-    "options": {
-      "debug": "false"
+    {
+      "target": "pnggroup/libpng@v1.6.47",
+      "artifact": {
+        "source": {
+          "type": "ghcr",
+          "url": "https://ghcr.io/v2/llar-artifacts/pnggroup/libpng/blobs/sha256:486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7"
+        },
+        "type": "zip",
+        "metadata": "-lpng",
+        "checksum": "486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7"
+      }
     }
-  }
+  ]
 }
 ```
 
-The body carries the selected matrix values. It does not carry `target`, `verbose`, or `defaultOptions`.
-
-Go shape:
-
-```go
-type JobRequest struct {
-	Matrix Matrix `json:"matrix"`
-}
-
-type Matrix struct {
-	Require map[string]string `json:"require"`
-	Options map[string]string `json:"options,omitempty"`
-}
-```
-
-The worker does not recompute `matrixStr` from `body.matrix`. `llar install` must generate `X-LLAR-Target` and `body.matrix` from the same selected matrix.
-
-### Non-Verbose Response
-
-Without `verbose=1`, the request waits until the artifact is available or the build fails. The response body is one JSON status message.
-
-```go
-type StatusMessage struct {
-	Type  string     `json:"type"`  // status
-	State JobState   `json:"state"` // completed | failed
-	Body  StatusBody `json:"body"`
-}
-
-type JobState string
-
-const (
-	JobCompleted JobState = "completed"
-	JobFailed    JobState = "failed"
-)
-
-type StatusBody struct {
-	Artifact *Artifact `json:"artifact,omitempty"`
-	Status   int       `json:"status,omitempty"`
-	Message  string    `json:"message,omitempty"`
-}
-```
-
-Completed:
+Error message body:
 
 ```json
 {
-  "type": "status",
-  "state": "completed",
-  "body": {
-    "artifact": {
-      "source": {
-        "type": "ghcr",
-        "url": "https://..."
-      },
-      "type": "zip",
-      "metadata": "...",
-      "checksum": "0f4c2f1b6f1c0c7b7a0d6f6c9a2c8f4e5d7c3b2a1f0e9d8c7b6a5f4e3d2c1b0a"
-    }
-  }
+  "message": "llar make failed"
 }
 ```
 
-Failed:
+Normal success stream:
 
-```json
-{
-  "type": "status",
-  "state": "failed",
-  "body": {
-    "status": 500,
-    "message": "llar make failed"
-  }
-}
+```text
+info {"stream":"stderr","text":"checking..."}
+info {"stream":"stderr","text":"building..."}
+artifact {"artifacts":[{"target":"madler/zlib@v1.3.1","artifact":{"source":{"type":"ghcr","url":"https://ghcr.io/v2/llar-artifacts/madler/zlib/blobs/sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"},"type":"zip","metadata":"-lz","checksum":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}},{"target":"pnggroup/libpng@v1.6.47","artifact":{"source":{"type":"ghcr","url":"https://ghcr.io/v2/llar-artifacts/pnggroup/libpng/blobs/sha256:486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7"},"type":"zip","metadata":"-lpng","checksum":"486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7"}}]}
 ```
 
-### Verbose Response
-
-With `verbose=1`, the response still uses `Content-Type: application/json`, but the body is a stream of JSON messages. The worker writes zero or more log messages and then one terminal status message.
-
-```go
-type LogMessage struct {
-	Type string  `json:"type"` // log
-	Data LogData `json:"data"`
-}
-
-type LogData struct {
-	Stream string `json:"stream,omitempty"` // stderr
-	Text   string `json:"text"`             // ANSI preserved
-}
-```
-
-Example:
-
-```json
-{"type":"log","data":{"stream":"stderr","text":"checking..."}}
-{"type":"log","data":{"stream":"stderr","text":"building..."}}
-{"type":"status","state":"completed","body":{"artifact":{"source":{"type":"ghcr","url":"https://..."},"type":"zip","metadata":"...","checksum":"0f4c2f1b6f1c0c7b7a0d6f6c9a2c8f4e5d7c3b2a1f0e9d8c7b6a5f4e3d2c1b0a"}}}
-```
-
-Go clients read verbose responses with `json.Decoder` by decoding one JSON value at a time.
+Clients parse each line by splitting at the first space. The command selects the response shape, and the JSON object is decoded into the corresponding structure. `info` lines are optional and may be ignored by clients that only care about the terminal `artifact` or `error`.
 
 ### Error Boundaries
 
@@ -195,53 +186,52 @@ Request errors happen before build execution and return HTTP request errors:
 
 | Status Code | Reason |
 | --- | --- |
-| 400 | Missing `X-LLAR-Target` |
-| 400 | Invalid `X-LLAR-Target` |
-| 400 | Invalid JSON body |
-| 400 | Missing `matrix` |
+| 400 | Missing module or version in the request path |
+| 400 | Invalid module or version in the request path |
+| 400 | Missing matrix query |
 | 500 | `artifact.Store.Get` failed before build execution |
 
-Build-time failures return a failed status message:
+Build-time failures return an `error` terminal message:
 
 | Status Code | Reason |
 | --- | --- |
 | 500 | LLAR build failed |
 | 500 | Artifact upload failed |
 | 500 | `artifact.Store.Put` database error |
-| 409 | Same artifact key with different checksum |
 
-`artifact.Put` must succeed before a completed status is sent. A checksum conflict for the same artifact key fails the current build with 409.
+`artifact.Store.Put` must succeed before an `artifact` message is sent.
 
-## Worker Module Specification
+## llard Module Specification
 
-The worker has one HTTP entrypoint and three internal submodules. The entrypoint wires HTTP to the worker modules. The submodules own build coordination, completed artifact metadata, and artifact upload.
+`llard` has one HTTP entrypoint and three internal submodules. The entrypoint wires HTTP to the service modules. The submodules own build coordination, completed artifact metadata, and artifact upload.
 
 ```text
-cmd/worker
+cmd/llard
   internal/build
   internal/artifact
   internal/upload
 ```
 
-### cmd/worker
+### cmd/llard
 
-`cmd/worker` is HTTP glue. It starts Gin, registers `POST /v1/jobs`, parses `X-LLAR-Target`, parses `verbose`, decodes `body.matrix`, calls `internal/build`, and writes the final response.
+`cmd/llard` is HTTP glue. It starts Gin, registers `GET /v1/artifacts/<module>@<version>`, parses module name, version, and matrix query, calls `internal/build`, and writes the command JSON line response.
 
-In verbose mode, `cmd/worker` adapts raw build logs into the public JSON log message shape. JSON response encoding stays at the HTTP boundary.
+`cmd/llard` adapts raw build output into public `info` command lines. Response encoding stays at the HTTP boundary.
 
 ### internal/build
 
-`internal/build` owns worker-local build coordination:
+`internal/build` owns llard-local build coordination:
 
 - completed artifact lookup before local entry lookup;
-- in-memory `ArtifactKey -> build entry` coordination;
+- in-memory artifact identity -> build entry coordination;
 - waiting for an existing local build;
 - starting a new local build;
-- raw verbose log fanout;
+- raw info fanout;
 - invoking the LLAR build path;
 - calling `upload`;
 - calling `artifact.Store.Put`;
-- removing local entries after terminal status.
+- using the artifact returned by `Put`;
+- removing local entries after terminal completion.
 
 Public interface:
 
@@ -264,8 +254,13 @@ type Request struct {
 	Matrix    Matrix
 }
 
-type Result struct {
+type TargetArtifact struct {
+	Target   string
 	Artifact artifact.Artifact
+}
+
+type Result struct {
+	Artifacts []TargetArtifact
 }
 
 type Builds struct {
@@ -273,20 +268,26 @@ type Builds struct {
 }
 
 func New(opts Options) *Builds
-func (b *Builds) Build(ctx context.Context, req Request, log io.Writer) (Result, error)
+func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) (Result, error)
 ```
 
-`log` is optional:
+`info` is optional:
 
 ```text
 nil
-  non-verbose request; wait for final Result/error only
+  non-streaming request; wait for final Result/error only
 
 non-nil
-  verbose request; write raw log text while waiting
+  streaming request; write raw info text while waiting
 ```
 
-`Build` never writes terminal completed or failed messages. The caller writes terminal status from `Result` or `error`.
+`Build` never writes terminal artifact or error messages. The caller writes the terminal artifact set from `Result` or the terminal error from `error`.
+
+### Builder Cloud Mode
+
+Dependency handling belongs inside the llard-side LLAR build path. When the llard runs `llar make`, Builder resolves dependencies, checks local cache, checks artifact metadata, downloads dependency artifacts when available, and builds missing dependencies locally when needed.
+
+This is not a global dependency build lock. The same dependency may be built more than once when two root builds need it at the same time, either on the same llard instance or on different llard instances. After a local dependency build finishes, Builder uploads the candidate artifact and calls `artifact.Store.Put`. Builder must use the artifact returned by `Put`; if another build already stored an artifact for the same dependency key, the returned stored artifact replaces the local candidate for the rest of the build.
 
 ### internal/artifact
 
@@ -304,7 +305,7 @@ type Key struct {
 type Artifact struct {
 	Source   Source `json:"source"`
 	Type     string `json:"type"`     // zip | tar.gz | tar.zst
-	Metadata string `json:"metadata"` // LLAR metadata, for example pkg-config info
+	Metadata string `json:"metadata"` // LLAR build metadata, for example -lz
 	Checksum string `json:"checksum"` // sha256
 }
 
@@ -330,25 +331,27 @@ Artifact table:
 | `source_type` | `TEXT NOT NULL` |  | Artifact source backend, for example `ghcr` |
 | `source_url` | `TEXT NOT NULL` |  | Direct artifact download URL |
 | `type` | `TEXT NOT NULL` |  | Archive type |
-| `metadata` | `TEXT NOT NULL` |  | LLAR metadata, for example pkg-config info |
+| `metadata` | `TEXT NOT NULL` |  | LLAR build metadata, for example `-lz` |
 | `checksum` | `TEXT NOT NULL` |  | Artifact checksum |
 | `created_at` | `TIMESTAMP NOT NULL` |  | Artifact metadata creation time |
 | `expires_at` | `TIMESTAMP NULL` |  | Optional artifact metadata expiration time |
 
 Primary key: `module`, `version`, `matrix_str`.
 
-`Put` is atomic and idempotent:
+`Put` is atomic and canonicalizes the completed artifact:
 
 ```text
 missing key
   insert artifact and return it
 
-same key + same checksum
+same key already exists
   return the existing stored artifact
 
-same key + different checksum
-  return conflict
+database write/read failure
+  return error
 ```
+
+Callers must use the artifact returned by `Put`. They must not continue with a locally produced candidate if `Put` returns an already stored artifact. This is true even when the local candidate has a different checksum. The first stored artifact is the canonical completed artifact for that key.
 
 ### internal/upload
 
@@ -382,139 +385,130 @@ type GHCRConfig struct {
 func NewGHCR(cfg GHCRConfig) Uploader
 ```
 
-`Uploader.Type()` is the artifact source type, for example `ghcr`. `Options.Type` is the archive type, for example `zip`, `tar.gz`, or `tar.zst`. `upload` computes checksum and size, uploads bytes, and returns upload metadata. Artifact DB writes and build state remain outside the upload module. `build` combines `Uploader.Type()`, upload URL, archive type, checksum, and LLAR metadata into `artifact.Artifact`.
+`Uploader.Type()` is the artifact source type, for example `ghcr`. `Options.Type` is the archive type, for example `zip`, `tar.gz`, or `tar.zst`. `upload` computes checksum and size, uploads bytes, and returns upload metadata. Artifact DB writes and build state remain outside the upload module. `build` combines `Uploader.Type()`, upload URL, archive type, checksum, and LLAR metadata into a candidate `artifact.Artifact`, then calls `artifact.Store.Put`.
 
 ## User Stories
 
 ### Request Routing
 
-All build requests enter through nginx. nginx hashes `X-LLAR-Target` and routes requests for the same artifact key to the same healthy worker. Worker-local build sharing depends on this routing affinity. If the selected worker becomes unhealthy, later requests may reach another worker; that worker checks the artifact DB before starting a build.
+All artifact requests enter through nginx. nginx hashes the request identity and routes requests for the same module, version, and matrix query to the same healthy llard. llard-local build sharing depends on this routing affinity. If the selected llard becomes unhealthy, later requests may reach another llard instance; that llard checks the artifact DB before starting a build.
 
 ```mermaid
 sequenceDiagram
   participant Client as "llar install"
   participant Nginx as "nginx"
-  participant Worker as "cloud-build-worker"
+  participant Llard as "llard"
 
-  Client->>Nginx: "POST /v1/jobs + X-LLAR-Target"
-  Nginx->>Nginx: "hash X-LLAR-Target"
-  Nginx->>Worker: "route to selected healthy worker"
+  Client->>Nginx: "GET /v1/artifacts/<module>@<version>?matrix"
+  Nginx->>Nginx: "hash request identity"
+  Nginx->>Llard: "route to selected healthy llard"
 ```
 
-### 1. Install An Artifact That Already Exists
+### 1. Install Artifacts That Already Exist
 
-The user runs `llar install <target>`. LLAR resolves the target, dependency order, and selected matrix locally. For a local cache miss, it posts the artifact key and matrix selection to cloud build.
+The user runs `llar install <target>`. The client sends one artifact request with the selected matrix. It does not resolve dependency graphs or submit dependency jobs.
 
-After routing, the worker checks completed artifact metadata first. If the artifact exists, the worker returns a completed status with `Artifact.Source`. The client downloads from the Artifact Store, verifies checksum, extracts into the LLAR install directory, and writes `.cache.json`.
+After routing, the llard checks completed artifact metadata first. If the artifact exists, the llard returns an `artifact` message with `Artifact.Source`. The client downloads from the Artifact Store, verifies checksum, extracts into the LLAR install directory, and writes `.cache.json`.
 
 ```mermaid
 sequenceDiagram
   participant Client as "llar install"
-  participant Worker as "cloud-build-worker"
-  participant DB as "Artifact DB"
-  participant Store as "Artifact Store"
+  participant Llard as "llard"
+  participant Artifact as "Artifact Layer"
 
-  Client->>Worker: "POST /v1/jobs after routing"
-  Worker->>DB: "artifact.Get(module, version, matrixStr)"
-  DB-->>Worker: "Artifact"
-  Worker-->>Client: "completed status + Artifact"
-  Client->>Store: "download Artifact.Source"
-  Store-->>Client: "archive bytes"
-  Client->>Client: "verify checksum, extract, write .cache.json"
+  Client->>Llard: "GET /v1/artifacts/<module>@<version>?matrix"
+  Llard->>Artifact: "read completed metadata"
+  Artifact-->>Llard: "Artifact"
+  Llard-->>Client: "artifact message"
+  Client->>Artifact: "download each Artifact.Source"
+  Artifact-->>Client: "archive bytes"
+  Client->>Client: "install each target and write .cache.json"
 ```
 
 ### 2. Build A Missing Artifact
 
-The client posts the same `POST /v1/jobs` request. The worker checks the artifact DB and misses. If no local build entry exists for the artifact key, the worker creates one and starts a build. The build runs the LLAR build path, uploads the archive to the Artifact Store, and writes completed metadata through `artifact.Store.Put`.
+The client sends the same GET request. The llard checks the artifact DB and misses. If no local build entry exists for the artifact key, the llard creates one and starts a build. The build runs the LLAR build path, uploads the archive to the Artifact Store, and writes completed metadata through `artifact.Store.Put`.
 
-After `Put` succeeds, all waiting requests receive completed status. The client then downloads the artifact bytes directly from the Artifact Store.
+After `Put` succeeds for the root and collected dependencies, all waiting requests receive `artifact` messages containing the ordered artifact set. The client then downloads every artifact directly from the Artifact Store.
 
 ```mermaid
 sequenceDiagram
   participant Client as "llar install"
-  participant Worker as "cloud-build-worker"
-  participant Build as "internal/build"
-  participant Upload as "internal/upload"
-  participant DB as "Artifact DB"
-  participant Store as "Artifact Store"
+  participant Llard as "llard"
+  participant Artifact as "Artifact Layer"
 
-  Client->>Worker: "POST /v1/jobs after routing"
-  Worker->>Build: "Build(request, optional raw log writer)"
-  Build->>DB: "artifact.Get"
-  DB-->>Build: "miss"
-  Build->>Build: "join or create local build entry"
-  Build->>Build: "run LLAR build path"
-  Build-->>Worker: "raw verbose logs when enabled"
-  Build->>Upload: "upload archive"
-  Upload->>Store: "publish archive"
-  Store-->>Upload: "source URL + checksum"
-  Upload-->>Build: "upload result"
-  Build->>DB: "artifact.Put"
-  DB-->>Build: "stored Artifact"
-  Build-->>Worker: "Result"
-  Worker-->>Client: "completed status + Artifact"
-  Client->>Store: "download Artifact.Source"
-  Store-->>Client: "archive bytes"
-  Client->>Client: "verify checksum, extract, write .cache.json"
+  Client->>Llard: "GET /v1/artifacts/<module>@<version>?matrix"
+  Llard->>Artifact: "read completed metadata"
+  Artifact-->>Llard: "miss"
+  Llard->>Llard: "join or create local build entry"
+  Llard->>Llard: "run LLAR build path"
+  Llard-->>Client: "info messages when verbose"
+  Llard->>Artifact: "upload archive and store completed metadata"
+  Artifact-->>Llard: "canonical Artifact"
+  Llard-->>Client: "artifact message"
+  Client->>Artifact: "download each Artifact.Source"
+  Artifact-->>Client: "archive bytes"
+  Client->>Client: "install each target and write .cache.json"
 ```
 
-### 3. Multiple Clients Ask For The Same Artifact
+### 3. Dependencies During llard Build
 
-Requests for the same `X-LLAR-Target` arrive at the same healthy worker. The first request creates the local build entry. Later requests for the same artifact key join that entry instead of starting another build.
+The client still sends one root artifact request. During that build, `llard` runs the LLAR build path. The Builder resolves dependencies, reuses dependency artifacts when metadata exists, locally builds missing dependencies when needed, and records every dependency artifact needed by the client.
 
-Verbose clients receive log output from the local entry. Non-verbose clients wait for the final status. Completed metadata is persisted once through `artifact.Store.Put`.
+```mermaid
+sequenceDiagram
+  participant Client as "llar install"
+  participant Llard as "llard"
+  participant Artifact as "Artifact Layer"
+
+  Client->>Llard: "GET root artifact"
+  Llard->>Llard: "run LLAR build path"
+  Llard->>Llard: "resolve dependency graph"
+  Llard->>Artifact: "read dependency artifact"
+  alt "dependency artifact exists"
+    Artifact-->>Llard: "Artifact + archive bytes"
+    Llard->>Llard: "write dependency cache"
+  else "dependency artifact missing"
+    Artifact-->>Llard: "miss"
+    Llard->>Llard: "build dependency locally"
+    Llard->>Artifact: "upload candidate and store metadata"
+    Artifact-->>Llard: "canonical Artifact"
+  end
+  Llard->>Llard: "append dependency artifact to result set"
+```
+
+Duplicate dependency builds are acceptable. `artifact.Store.Put` chooses the canonical completed artifact. If another build already stored the same dependency, Builder uses the artifact returned by `Put`, even when its local candidate has a different checksum. The terminal response still returns the canonical dependency artifact so the client can install it locally.
+
+### 4. Multiple Clients Ask For The Same Root Artifact
+
+Requests for the same request identity arrive at the same healthy llard. The first request creates the local build entry. Later requests for the same artifact key join that entry instead of starting another root build.
+
+Streaming clients receive `info` output from the local entry. Non-streaming clients wait for the terminal message. Completed metadata is persisted once through `artifact.Store.Put`; the terminal response contains the same ordered artifact set for all joined clients.
 
 ```mermaid
 sequenceDiagram
   participant A as "llar install A"
   participant B as "llar install B"
-  participant Worker as "same worker"
-  participant Build as "local build entry"
-  participant DB as "Artifact DB"
-  participant Store as "Artifact Store"
+  participant Llard as "same llard"
+  participant Artifact as "Artifact Layer"
 
-  A->>Worker: "POST /v1/jobs after routing"
-  Worker->>DB: "artifact.Get"
-  DB-->>Worker: "miss"
-  Worker->>Build: "create entry and start build"
-  B->>Worker: "POST /v1/jobs after routing"
-  Worker->>DB: "artifact.Get"
-  DB-->>Worker: "miss"
-  Worker->>Build: "join existing entry"
-  Build->>Store: "publish archive"
-  Build->>DB: "artifact.Put"
-  DB-->>Build: "stored Artifact"
-  Build-->>A: "completed status + Artifact"
-  Build-->>B: "completed status + Artifact"
+  A->>Llard: "GET /v1/artifacts/<module>@<version>?matrix"
+  Llard->>Artifact: "read completed metadata"
+  Artifact-->>Llard: "miss"
+  Llard->>Llard: "create entry and start build"
+  B->>Llard: "GET /v1/artifacts/<module>@<version>?matrix"
+  Llard->>Artifact: "read completed metadata"
+  Artifact-->>Llard: "miss"
+  Llard->>Llard: "join existing entry"
+  Llard->>Artifact: "upload archive and store completed metadata"
+  Artifact-->>Llard: "canonical Artifact"
+  Llard-->>A: "artifact message"
+  Llard-->>B: "artifact message"
 ```
 
-### 4. Verbose Client Reconnects
+### 5. llard Fails During A Build
 
-A verbose client may disconnect and send a new `POST /v1/jobs?verbose=1` for the same `X-LLAR-Target`. If the build is still active, the worker replays the current in-memory log ring from its first retained entry, then streams live logs. The client can keep a per-build printed log count and skip that many replayed log messages to avoid duplicate terminal output.
-
-The log ring is bounded. Logs are diagnostic and do not guarantee complete history. Terminal completed/failed status is independent from log replay.
-
-```mermaid
-sequenceDiagram
-  participant Client as "llar install --verbose"
-  participant Worker as "cloud-build-worker"
-  participant Build as "local build entry"
-
-  Client->>Worker: "POST /v1/jobs?verbose=1 after routing"
-  Worker->>Build: "join active entry with log writer"
-  Build-->>Client: "log messages"
-  Client--xWorker: "disconnect"
-  Build->>Build: "continue build and retain bounded log ring"
-  Client->>Worker: "POST /v1/jobs?verbose=1 after routing"
-  Worker->>Build: "join active entry"
-  Build-->>Client: "replay retained logs"
-  Build-->>Client: "live log messages"
-  Build-->>Client: "terminal completed or failed status"
-```
-
-### 5. Worker Fails During A Build
-
-If a worker dies or is removed by nginx health checks, in-memory build entries and logs are lost. Later requests may reach another worker. The fallback worker checks the artifact DB first. If the artifact exists, it returns completed. If the artifact is still missing, it starts a new build.
+If a llard dies or is removed by nginx health checks, in-memory build entries and retained info output are lost. Later requests may reach another llard instance. The fallback llard instance checks the artifact DB first. If the artifact exists, it returns an `artifact` message. If the artifact is still missing, it starts a new build.
 
 Duplicate builds are acceptable in these failure windows. `artifact.Store.Put` is the consistency boundary that prevents completed metadata from becoming ambiguous.
 
@@ -522,29 +516,27 @@ Duplicate builds are acceptable in these failure windows. `artifact.Store.Put` i
 sequenceDiagram
   participant Client as "llar install"
   participant Nginx as "nginx"
-  participant W1 as "worker A"
-  participant W2 as "worker B"
-  participant DB as "Artifact DB"
-  participant Store as "Artifact Store"
+  participant W1 as "llard A"
+  participant W2 as "llard B"
+  participant Artifact as "Artifact Layer"
 
-  Client->>Nginx: "POST /v1/jobs + X-LLAR-Target"
+  Client->>Nginx: "GET /v1/artifacts/<module>@<version>?matrix"
   Nginx->>W1: "hash-routed request"
-  W1->>DB: "artifact.Get"
-  DB-->>W1: "miss"
+  W1->>Artifact: "read completed metadata"
+  Artifact-->>W1: "miss"
   W1->>W1: "start local build"
-  W1--xNginx: "worker removed by health check"
-  Client->>Nginx: "retry POST /v1/jobs + same X-LLAR-Target"
-  Nginx->>W2: "fallback worker"
-  W2->>DB: "artifact.Get"
+  W1--xNginx: "llard removed by health check"
+  Client->>Nginx: "retry same GET"
+  Nginx->>W2: "fallback llard"
+  W2->>Artifact: "read completed metadata"
   alt "artifact exists"
-    DB-->>W2: "Artifact"
-    W2-->>Client: "completed status + Artifact"
+    Artifact-->>W2: "Artifact"
+    W2-->>Client: "artifact message"
   else "artifact missing"
-    DB-->>W2: "miss"
+    Artifact-->>W2: "miss"
     W2->>W2: "start new local build"
-    W2->>Store: "publish archive"
-    W2->>DB: "artifact.Put"
-    DB-->>W2: "stored Artifact"
-    W2-->>Client: "completed status + Artifact"
+    W2->>Artifact: "upload archive and store completed metadata"
+    Artifact-->>W2: "canonical Artifact"
+    W2-->>Client: "artifact message"
   end
 ```

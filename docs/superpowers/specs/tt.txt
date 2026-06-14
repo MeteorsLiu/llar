@@ -1,0 +1,511 @@
+# llar Cloud Build Architecture
+## Background
+LLAR is a cloud-based multi-language package manager built with XGo. It manages
+C/C++ and other native libraries through declarative formula files. A formula
+describes how to resolve dependencies through `onRequire` and how to build a
+library through `onBuild`.
+Today the main user-facing command is `llar make`. It resolves the requested
+module, loads formulas, resolves dependencies with MVS, builds dependencies
+before dependents, downloads source code, runs formula build hooks, and records
+the result in LLAR's local build cache.
+`llar install` adds the prebuilt-artifact path for the same package manager. It
+should install a completed artifact when one exists, and ask cloud build to
+produce one when it does not. It must still look like LLAR to the user: module
+resolution, matrix selection, dependency order, install directories, cache
+metadata, and result selection stay in `llar`.
+Cloud build changes only the cache-miss action.
+```text
+llar make
+cache miss -> run OnBuild locally
+llar install
+cache miss -> ask Scheduler for a completed artifact or a remote build
+```
+`llar make` remains the build command. The remote executor runs `llar make`; it
+does not reimplement formula logic and it does not become a public build API.
+## Goals
+The system is designed around four practical goals:
+- `llar install` must preserve local cache semantics.
+- The same `module/version/matrix` should build once even if many clients ask
+for it.
+- Artifact bytes must not flow through the Scheduler.
+- `llar`, Scheduler, and edge agent code must stay separated.
+This design does not add `sourceHash`, `formulaHash`, lock-file
+reproducibility, new formula APIs, or new `modules.Load` semantics.
+## Architecture At A Glance
+The runtime has five layers. The important boundary is that `llar` owns install
+behavior, the Scheduler owns coordination, the agent owns execution, and the
+artifact backend owns bytes.
+<img width="2048" height="1152" alt="Image" src="https://github.com/user-attachments/assets/93cf8e40-2920-4c21-9a1c-e73211b7060d" />
+The top-level data flow is:
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+flowchart RL
+Client["llar install"]
+subgraph Scheduler["Scheduler"]
+direction TB
+Queue["Queue (Asynq / Redis)"]
+DB[("DB")]
+end
+subgraph Store["Artifact Store"]
+direction TB
+GHCR[("GHCR")]
+end
+subgraph VM["VM"]
+direction TB
+Actions["GitHub Actions"]
+Agent["llar-agent"]
+Make["llar make"]
+Actions ~~~ Agent
+Agent ~~~ Make
+end
+Client -->|"target + matrix"| Scheduler
+Scheduler -->|"ready / pending + job status"| Client
+Scheduler -->|"logs when verbose"| Client
+Scheduler -->|"agentID + token"| VM
+VM -->|"heartbeat + events"| Scheduler
+Scheduler -->|"run_job"| VM
+VM -->|"artifact archive"| Store
+VM -->|"dependency artifacts"| Store
+Client -->|"completed artifact"| Store
+```
+## Terms
+- **Target**: module and version, for example `pnggroup/libpng@v1.6.47`.
+- **Matrix**: the existing `formula.Matrix` shape. Public APIs pass the
+structured matrix, not `MatrixStr`.
+- **MatrixStr**: internal build-cache key derived from
+`formula.Matrix.Combinations()[0]`.
+- **ArtifactKey**: `module + version + matrixStr`.
+- **JobID**: client recovery handle returned by `POST /v1/jobs` and used by
+`/v1/jobs/{jobID}/ws`.
+- **Agent**: a provider-started `llar-agent` process connected to the Scheduler
+over an outbound WebSocket.
+## User Stories
+### 1. Installing An Artifact That Already Exists
+This is the cheapest path. The Scheduler only answers where the bytes are; the
+client downloads and materializes the artifact locally.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant User as "User"
+participant Client as "llar install"
+participant Scheduler as "Scheduler"
+participant Backend as "Artifact Backend"
+participant Cache as "installDir + .cache.json"
+User->>Client: "llar install <target>"
+Client->>Client: "resolve deps, build order, formula.Matrix"
+Client->>Scheduler: "POST /v1/jobs target + matrix"
+Scheduler-->>Client: "status=ready + Artifact"
+Client->>Backend: "download Artifact.Source"
+Backend-->>Client: "archive bytes"
+Client->>Client: "verify sha256"
+Client->>Cache: "extract installDir and write .cache.json"
+```
+The last step is required. A downloaded artifact must be written to both the
+install directory and the cache metadata entry; otherwise later `llar make`
+cannot observe it as a cache hit.
+### 2. Building A Missing Artifact
+When no completed artifact exists, the Scheduler creates or reuses a pending
+job. The client waits on the job. The agent builds and uploads the artifact.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant Client as "llar install"
+participant Scheduler as "Scheduler"
+participant Agent as "llar-agent"
+participant Backend as "Artifact Backend"
+Client->>Scheduler: "POST /v1/jobs target + matrix"
+Scheduler-->>Client: "status=pending + jobID"
+Client->>Scheduler: "GET /v1/jobs/{jobID}/ws"
+Scheduler-->>Agent: "provider starts agent"
+Agent->>Scheduler: "outbound WebSocket + heartbeat"
+Scheduler->>Agent: "run_job target + matrix + output"
+Agent->>Backend: "download dependency artifacts"
+Agent->>Agent: "run llar make -v -o"
+Agent->>Backend: "publish archive"
+Agent->>Scheduler: "completed + Artifact"
+Scheduler-->>Client: "status=completed + Artifact"
+Scheduler->>Agent: "ack target + matrix"
+Client->>Backend: "download Artifact.Source"
+```
+The client subscribes to a build job, not to an agent. That keeps client
+recovery simple when an agent reconnects or gets replaced.
+### 3. Multiple Clients Ask For The Same Artifact
+Active dedupe is keyed by `ArtifactKey`. Later clients do not create another
+build; they receive the same `jobID` and subscribe to the same build fanout.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant A as "Client A"
+participant B as "Client B"
+participant Scheduler as "Scheduler"
+A->>Scheduler: "POST /v1/jobs"
+Scheduler-->>A: "pending + jobID"
+A->>Scheduler: "GET /v1/jobs/{jobID}/ws"
+B->>Scheduler: "POST /v1/jobs"
+Scheduler-->>B: "pending + same jobID"
+B->>Scheduler: "GET /v1/jobs/{same jobID}/ws"
+Scheduler-->>A: "completed"
+Scheduler-->>B: "completed"
+```
+## How The Pieces Are Used
+### llar
+`llar install` uses the existing `build.Builder` in remote mode. It still owns
+dependency resolution and build order. For each module in that order, it checks
+the local cache first. Only a local cache miss calls `remote.Client.Submit`.
+`remote.Client` is deliberately small:
+- `Submit` maps to `POST /v1/jobs`.
+- `Wait` maps to `/v1/jobs/{jobID}/ws`.
+It does not resolve modules, calculate install directories, unpack artifacts,
+or write `.cache.json`. Those behaviors stay in `build.Builder` because they
+are part of install semantics, not HTTP protocol.
+Inside `llar`, the cloud path is just a different cache-miss branch:
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+flowchart TB
+CLI["llar install"] --> Resolve["resolve target version, matrix, deps"]
+Resolve --> Builder["build.Builder ModeRemote"]
+Builder --> CacheCheck["existing cache check"]
+CacheCheck -->|"hit"| Result["return existing build result"]
+CacheCheck -->|"miss"| Submit["remote.Client.Submit"]
+Submit -->|"ready"| DownloadReady["download Artifact.Source"]
+Submit -->|"pending"| Wait["remote.Client.Wait jobID"]
+Wait --> DownloadPending["download completed Artifact.Source"]
+DownloadReady --> Verify["verify sha256"]
+DownloadPending --> Verify
+Verify --> InstallDir["extract to installDir(module, version, matrixStr)"]
+InstallDir --> CacheMeta["write .cache.json metadata"]
+CacheMeta --> Result
+```
+This diagram is the reason `remote.Client` stays small. It is only the network
+client used by the remote cache-miss branch; install state is still owned by
+`build.Builder`.
+### Scheduler
+The Scheduler has two public client responsibilities:
+- answer `POST /v1/jobs` with either `ready + Artifact` or `pending + jobID`;
+- keep `/v1/jobs/{jobID}/ws` open until the job completes or fails.
+Internally, those responsibilities are split:
+- `artifact` stores completed artifact metadata.
+- `build` owns pending build runtime, Redis building keys, Asynq task creation,
+client subscribers, log rings, and terminal fanout.
+- `dispatcher` claims unassigned pending jobs and chooses whether to reuse or
+start an agent.
+- `agent` represents one connected agent WebSocket. It only encodes, decodes,
+serializes writes, and reports callbacks.
+- `vm` starts and stops provider resources. An agent runs on a VM-like provider
+resource, one agent per resource.
+Gin resources stay in the Scheduler layer as glue. They parse HTTP/WebSocket
+requests, call the modules above, and render responses. They are not part of
+the `build`, `artifact`, or `agent` packages.
+The top-level "missing artifact" story enters the Scheduler through three
+interfaces:
+- `POST /v1/jobs` decides ready vs pending.
+- `/v1/jobs/{jobID}/ws` waits for terminal status and optional logs.
+- the agent WebSocket receives heartbeats/events and sends commands/acks.
+#### Submit API
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant JobsAPI as "Scheduler jobs resource"
+participant Redis as "Redis building"
+participant Artifacts as "artifact.Store"
+participant Build as "build"
+participant Asynq as "Asynq"
+JobsAPI->>JobsAPI: "derive ArtifactKey"
+JobsAPI->>Redis: "read artifact:building:<key>"
+alt "active build exists"
+Redis-->>JobsAPI: "jobID"
+JobsAPI-->>JobsAPI: "return pending + jobID"
+else "no active build or completed metadata"
+JobsAPI->>Artifacts: "Get(ArtifactKey)"
+alt "artifact exists"
+Artifacts-->>JobsAPI: "Artifact"
+JobsAPI-->>JobsAPI: "return ready + Artifact"
+else "artifact missing"
+JobsAPI->>Build: "Submit(Build)"
+Build->>Build: "create/reuse pending job and runtime entry"
+Build->>Redis: "write artifact:building:<key>"
+Build->>Asynq: "create/reuse task with ArtifactKey.String()"
+Build-->>JobsAPI: "JobID"
+JobsAPI-->>JobsAPI: "return pending + JobID"
+end
+end
+```
+Redis is only the hot in-progress index. It does not store completed artifact
+URLs, metadata, checksum, or archive type. Completed artifact metadata comes
+from the artifacts table. The Redis miss path is protected by local
+singleflight, but that is an implementation guard around the same API flow, not
+a separate Scheduler interface.
+#### Client Job WebSocket
+The client WebSocket is attached to `jobID`, not to an agent. It is a build
+fanout subscription.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant ClientWS as "jobs ws resource"
+participant Build as "build"
+participant LogRing as "log ring"
+participant Writer as "client WebSocket writer"
+ClientWS->>Build: "Subscribe(jobID, verbose, writer)"
+alt "verbose"
+Build->>LogRing: "read current window"
+LogRing-->>Writer: "replay log messages"
+end
+Build-->>Writer: "live log messages when verbose"
+Build-->>Writer: "terminal completed or failed"
+Build-->>ClientWS: "Subscribe returns"
+```
+`build.Subscribe` does not know which agent is running the job. It only waits
+for `Job.Log`, `Job.Complete`, or `Job.Fail`.
+#### Dispatch
+The dispatch signal is intentionally small. It only wakes the dispatcher; it is
+not trusted as job data.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant JobsAPI as "Scheduler jobs resource"
+participant Redis as "Redis pub-sub"
+participant Dispatcher as "dispatcher"
+participant DB as "jobs DB"
+participant VM as "vm"
+participant Actions as "GitHub Actions"
+participant Runner as "GitHub runner"
+participant AgentCtl as "agent control"
+JobsAPI->>Redis: "publish dispatch"
+Redis-->>Dispatcher: "wake"
+Dispatcher->>DB: "scan pending jobs with no current_agent_id"
+Dispatcher->>DB: "claim by conditional update"
+Dispatcher->>VM: "start or reuse provider resource"
+VM->>Actions: "workflow_dispatch agentID + token + Scheduler URL"
+Actions-->>Runner: "start workflow runner"
+Runner-->>AgentCtl: "llar-agent connects outbound"
+AgentCtl-->>Dispatcher: "agent connected and heartbeated"
+Dispatcher->>AgentCtl: "write run_job"
+```
+A low-frequency tick repairs missed wakeups by restoring missing Redis building
+keys and Asynq tasks from pending jobs, then publishing another dispatch
+signal. The tick does not directly assign agents.
+GitHub Actions is the preferred initial provider path. The Scheduler still
+talks to it through `vm`, so Kubernetes or another provider can implement the
+same `start agent with Scheduler URL, agentID, and token` behavior later.
+#### Agent Events
+Agent event handling is Scheduler glue. The Scheduler-side `agent` package only
+decodes messages and invokes callbacks.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant Agent as "agent ws"
+participant Glue as "Scheduler glue"
+participant JobsDB as "jobs DB"
+participant Artifacts as "artifact.Store"
+participant Build as "build"
+Agent->>Glue: "event log/completed/failed"
+Glue->>JobsDB: "validate current_agent_id + target + matrix"
+alt "log"
+Glue->>Build: "Job.Log(LogData)"
+else "completed"
+Glue->>Artifacts: "Put(ArtifactKey, Artifact)"
+Artifacts-->>Glue: "stored or conflict"
+Glue->>Build: "Job.Complete(Artifact)"
+Glue->>Agent: "ack target + matrix"
+else "failed"
+Glue->>Build: "Job.Fail(status, message)"
+Glue->>Agent: "ack target + matrix"
+end
+```
+The `agent` package must not call `build` or `artifact`. Scheduler glue owns
+that boundary.
+### Edge Agent
+`llar-agent` is a separate program. It starts with Scheduler URL, agent ID, and
+token, then connects outbound to the Scheduler. After the first heartbeat, the
+Scheduler can send `run_job` commands.
+For each command, the agent:
+- prepares an isolated workspace;
+- uses `modules.Load(target, matrixStr)` to find direct dependency artifacts;
+- downloads dependency artifacts into that workspace and writes cache metadata;
+- runs `llar make -v -o <tmp>/artifact.zip`;
+- streams stderr as log events;
+- keeps stdout as final build metadata;
+- uploads the archive;
+- sends completed or failed;
+- waits for terminal ack.
+Agents may run multiple independent jobs, but they are not a permanent pool.
+The Scheduler controls concurrency, max job count, and busy-only reuse. If an
+agent has no running jobs, it should stop accepting new jobs and be cleaned up.
+Inside the agent, the user story is one control loop plus one per-job execution
+path:
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+flowchart TB
+Start["agent process starts"] --> Connect["connect Scheduler WebSocket"]
+Connect --> Heartbeat["send heartbeats from stats samples"]
+Connect --> ReadLoop["read protocol messages"]
+ReadLoop -->|"command run_job"| Workspace["prepare isolated workspace"]
+Workspace --> LoadDeps["modules.Load(target, matrixStr)"]
+LoadDeps --> DepArtifacts["download dependency artifacts"]
+DepArtifacts --> DepCache["write dependency installDir + cache metadata"]
+DepCache --> Make["run llar make -v -o"]
+Make -->|"stderr"| LogEvent["send event log"]
+Make -->|"stdout"| Metadata["buffer final metadata"]
+Make -->|"archive"| Upload["upload archive"]
+Upload --> Completed["send event completed + Artifact"]
+Make -->|"error"| Failed["send event failed"]
+Completed --> AckWait["wait for ack target + matrix"]
+Failed --> AckWait
+AckWait --> ExitCheck["exit when no running jobs and no unacked terminal events"]
+```
+The agent does not need `jobID` for this flow. It executes `target + matrix`;
+the Scheduler maps events back to the pending job assigned to that agent.
+### Artifact Backend
+The backend stores bytes. The public artifact contract is only a download
+description:
+```go
+type Artifact struct {
+Source ArtifactSource `json:"source"`
+Type string `json:"type"`
+Metadata string `json:"metadata"`
+Checksum string `json:"checksum"`
+}
+```
+The Scheduler stores this metadata, but does not proxy the archive. Clients and
+agents download directly from `Artifact.Source`.
+For GHCR:
+```text
+package = ghcr.io/<owner>/<target.module>
+tag = target.version
+matrix = OCI index manifest annotation org.llar.matrix = MatrixStr
+blob = artifact archive layer
+```
+Public GHCR blob downloads use `Authorization: Bearer QQ==`. Publish
+credentials come from the agent runtime, such as GitHub Actions `GITHUB_TOKEN`;
+they are not passed through the Scheduler protocol.
+The artifact backend participates in the user story through metadata lookup and
+direct byte transfer:
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+flowchart TB
+ArtifactKey["ArtifactKey module/version/matrixStr"] --> StoreGet["artifact.Store.Get"]
+StoreGet -->|"hit"| ReadyArtifact["Artifact metadata"]
+ReadyArtifact --> ClientDownload["client downloads Source.URL directly"]
+AgentUpload["agent uploads archive"] --> BackendBytes["artifact backend bytes"]
+BackendBytes --> SourceURL["Source.Type + Source.URL"]
+SourceURL --> StorePut["artifact.Store.Put"]
+StorePut --> ReadyArtifact
+ClientDownload --> Verify["client verifies checksum"]
+Verify --> LocalInstall["client writes installDir + .cache.json"]
+```
+`artifact.Store` is metadata storage. It is not an upload API for clients and it
+does not proxy downloads.
+## Important Boundaries
+The design depends on these boundaries staying clear:
+- The client submits builds in dependency build order. The Scheduler does not
+recursively submit dependency jobs.
+- The agent may load dependencies to prepare its workspace, but dependency
+artifacts are expected to already exist because the client submitted in order.
+- `build` does not write completed artifact metadata. Scheduler glue calls
+`artifact.Store.Put` first, then `Job.Complete`.
+- The Scheduler-side `agent` package does not import `build` or `artifact`.
+Scheduler glue handles agent events and calls the correct modules.
+- The agent protocol does not expose `jobID`. Agent messages identify work by
+`target + matrix`; the Scheduler maps that back to the assigned pending job.
+## Failure And Recovery
+### Client WebSocket Disconnect
+Client recovery is based on `jobID`.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant Client as "llar install"
+participant Build as "build"
+participant DB as "jobs DB"
+Client->>Build: "GET /v1/jobs/{jobID}/ws"
+Build-->>Client: "logs/status while connected"
+Client--xBuild: "network disconnect"
+Client->>Build: "reconnect same jobID"
+Build->>DB: "load job state if runtime entry is missing"
+DB-->>Build: "pending or terminal"
+Build-->>Client: "reattach or send terminal status"
+```
+Subscribers and log rings are in memory. Losing them does not lose the job.
+Verbose reconnect replays only the current log ring if it still exists.
+### Scheduler Restart
+Scheduler restart loses WebSocket connections, subscribers, log rings, active
+agent map, and local singleflight state. Persistent state is used to rebuild
+the control plane.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant Scheduler as "Scheduler"
+participant DB as "jobs / agents DB"
+participant Redis as "Redis + Asynq"
+participant Agent as "llar-agent"
+participant Client as "llar install"
+Scheduler->>DB: "load connected/reconnecting agents"
+Scheduler->>DB: "load pending jobs and current_agent_id"
+Scheduler->>Scheduler: "rebuild agent map placeholders"
+Scheduler->>Scheduler: "start 150s reconnect timers"
+Scheduler->>Redis: "start pub-sub and low-frequency tick"
+Agent->>Scheduler: "reconnect outbound WebSocket"
+Scheduler->>Scheduler: "validate agentID + token"
+Agent->>Scheduler: "heartbeat"
+Client->>Scheduler: "reconnect /v1/jobs/{jobID}/ws"
+Scheduler-->>Client: "reattach to build fanout"
+```
+If an agent does not reconnect inside the 150 second window, its pending jobs
+are unassigned and requeued with the same `jobID`.
+### Agent Disconnect
+Agent recovery preserves pending job IDs. During the reconnect window, jobs
+assigned to that agent are not given to another agent.
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant Agent as "llar-agent"
+participant Scheduler as "Scheduler"
+participant DB as "jobs / agents DB"
+participant VM as "vm"
+Agent--xScheduler: "WebSocket disconnect before terminal event"
+Scheduler->>DB: "agent state=reconnecting, disconnected_at=now"
+Scheduler->>Scheduler: "start 150s timer"
+alt "agent reconnects in time"
+Agent->>Scheduler: "connect same agentID + token"
+Scheduler->>DB: "agent state=connected"
+Agent->>Scheduler: "heartbeat"
+Scheduler->>Agent: "resend still-pending commands if needed"
+else "agent misses window"
+Scheduler->>DB: "agent state=closed, token invalid"
+Scheduler->>DB: "unassign pending jobs"
+Scheduler->>VM: "stop provider resource if handle exists"
+Scheduler->>Scheduler: "requeue original jobIDs"
+end
+```
+Late reconnects or late terminal events from a closed agent are rejected. A job
+accepts terminal status only from its currently assigned agent.
+### Artifact Completion Ordering
+Successful completion must be persisted in this order:
+```mermaid
+%%{init: {"theme":"base","themeVariables":{"background":"transparent","mainBkg":"transparent","primaryColor":"transparent","primaryBorderColor":"#60a5fa","primaryTextColor":"#e5e7eb","clusterBkg":"transparent","clusterBorder":"#60a5fa","clusterTextColor":"#e5e7eb","titleColor":"#e5e7eb","lineColor":"#6b7280","textColor":"#e5e7eb","actorBkg":"transparent","actorBorder":"#60a5fa","actorTextColor":"#e5e7eb","actorLineColor":"#6b7280","signalColor":"#e5e7eb","signalTextColor":"#e5e7eb","activationBkgColor":"transparent","activationBorderColor":"#60a5fa","labelBoxBkgColor":"transparent","labelBoxBorderColor":"#60a5fa","labelTextColor":"#e5e7eb","noteBkgColor":"transparent","noteBorderColor":"#60a5fa","noteTextColor":"#e5e7eb"}}}%%
+sequenceDiagram
+participant Agent as "llar-agent"
+participant Scheduler as "Scheduler glue"
+participant Artifacts as "artifact.Store"
+participant Build as "build"
+Agent->>Scheduler: "completed + Artifact"
+Scheduler->>Artifacts: "Put(ArtifactKey, Artifact)"
+Artifacts-->>Scheduler: "stored or idempotent"
+Scheduler->>Build: "Job.Complete(Artifact)"
+Build-->>Scheduler: "fanout complete and delete building key"
+Scheduler->>Agent: "ack target + matrix"
+```
+`Job.Complete` must not happen before `artifact.Store.Put`. Otherwise a new
+submit could see no building key and no completed artifact, then create a
+duplicate build.
+### Internal Failure Policy
+The initial policy is intentionally small:
+- If pending job creation succeeds but Redis building, Asynq task creation, or
+dispatch publish fails, `POST /v1/jobs` returns 500. The low-frequency tick
+may later repair the hot path.
+- Dispatcher/provider failures are written to normal Scheduler service logs,
+for example `log.Printf`; they are not client verbose logs.
+- A failed `run_job` WebSocket write is treated as agent disconnect.
+- If `artifact.Store.Put` fails, the Scheduler does not call `Job.Complete`.
+- Same artifact key with different checksum fails the job with 409.
+- There is no application-level ack timeout. WebSocket write failure is the
+connection failure signal.
