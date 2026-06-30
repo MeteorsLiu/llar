@@ -20,8 +20,9 @@ import (
 )
 
 type GHCRConfig struct {
-	Owner string
-	Token string
+	Owner    string
+	Username string
+	Token    string
 }
 
 func NewGHCR(cfg GHCRConfig) Uploader {
@@ -76,7 +77,7 @@ func (u ghcrUploader) Upload(ctx context.Context, r io.ReadSeeker, opts Options)
 	if writeIndex == nil {
 		writeIndex = writeRemoteIndex
 	}
-	if err := writeIndex(ctx, ref.String(), index, u.cfg.Owner, u.cfg.Token); err != nil {
+	if err := writeIndex(ctx, ref.String(), index, u.cfg.Username, u.cfg.Token); err != nil {
 		return Result{}, err
 	}
 
@@ -195,11 +196,8 @@ func writeRemoteIndex(ctx context.Context, ref string, index v1.ImageIndex, user
 	}
 	opts := []remote.Option{remote.WithContext(ctx)}
 	if token != "" {
-		if username == "" {
-			username = "llar"
-		}
 		opts = append(opts, remote.WithAuth(authn.FromConfig(authn.AuthConfig{
-			Username: strings.ToLower(username),
+			Username: username,
 			Password: token,
 		})))
 	}
