@@ -101,15 +101,9 @@ type Target struct {
 	Version string
 }
 
-type Matrix struct {
-	Require map[string]string `json:"require"`
-	Options map[string]string `json:"options,omitempty"`
-}
-
 type Request struct {
 	Target    Target
 	MatrixStr string
-	Matrix    Matrix
 }
 
 type TargetArtifact struct {
