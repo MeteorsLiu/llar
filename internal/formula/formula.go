@@ -12,11 +12,11 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/MeteorsLiu/llar/formula"
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
-	"github.com/goplus/llar/formula"
 
-	_ "github.com/goplus/llar/internal/ixgo"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo"
 )
 
 // Formula represents a loaded LLAR formula file with its metadata and callbacks.
@@ -48,7 +48,7 @@ type Formula struct {
 // xgobuild.BuildFile generates:
 //
 //	package main
-//	import "github.com/goplus/llar/formula"
+//	import "github.com/MeteorsLiu/llar/formula"
 //
 //	type hello struct {
 //	    formula.ModuleF

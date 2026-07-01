@@ -7,10 +7,10 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/artifact"
-	"github.com/goplus/llar/internal/modules/modlocal"
-	"github.com/goplus/llar/internal/upload"
+	"github.com/MeteorsLiu/llar/formula"
+	"github.com/MeteorsLiu/llar/internal/artifact"
+	"github.com/MeteorsLiu/llar/internal/modules/modlocal"
+	"github.com/MeteorsLiu/llar/internal/upload"
 	"golang.org/x/sync/singleflight"
 )
 

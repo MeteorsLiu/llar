@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goplus/llar/internal/lockedfile/filelock"
+	"github.com/MeteorsLiu/llar/internal/lockedfile/filelock"
 )
 
 func lock(t *testing.T, f *os.File) {

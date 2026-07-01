@@ -10,7 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 func TestModuleDeps_Require(t *testing.T) {

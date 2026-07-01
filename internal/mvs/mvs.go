@@ -12,8 +12,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/goplus/llar/internal/mvs/par"
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/internal/mvs/par"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 // A Reqs is the requirement graph on which Minimal Version Selection (MVS) operates.

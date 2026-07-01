@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 // sortWith sorts a list of modules first by module path (ID), then by version.

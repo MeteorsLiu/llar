@@ -11,14 +11,14 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/artifact/archiver"
-	"github.com/goplus/llar/internal/build"
-	"github.com/goplus/llar/internal/formula/repo"
-	"github.com/goplus/llar/internal/modules"
-	"github.com/goplus/llar/internal/modules/modlocal"
-	"github.com/goplus/llar/internal/vcs"
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/formula"
+	"github.com/MeteorsLiu/llar/internal/artifact/archiver"
+	"github.com/MeteorsLiu/llar/internal/build"
+	"github.com/MeteorsLiu/llar/internal/formula/repo"
+	"github.com/MeteorsLiu/llar/internal/modules"
+	"github.com/MeteorsLiu/llar/internal/modules/modlocal"
+	"github.com/MeteorsLiu/llar/internal/vcs"
+	"github.com/MeteorsLiu/llar/mod/module"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +36,7 @@ var newRemoteStore = func() (repo.Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get formula dir: %w", err)
 	}
-	formulaRepo, err := vcs.NewRepo("github.com/goplus/llarhub")
+	formulaRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarhub")
 	if err != nil {
 		return nil, err
 	}

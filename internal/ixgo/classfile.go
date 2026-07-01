@@ -14,7 +14,7 @@ func init() {
 		Ext:   "_cmp.gox",
 		Class: "CmpApp",
 		PkgPaths: []string{
-			"github.com/goplus/llar/cmp",
+			"github.com/MeteorsLiu/llar/cmp",
 		},
 		Import: []*modfile.Import{
 			{
@@ -23,7 +23,7 @@ func init() {
 			},
 			{
 				Name: "gnu",
-				Path: "github.com/goplus/llar/x/gnu",
+				Path: "github.com/MeteorsLiu/llar/x/gnu",
 			},
 		},
 	})
@@ -31,16 +31,16 @@ func init() {
 		Ext:   "_llar.gox",
 		Class: "ModuleF",
 		PkgPaths: []string{
-			"github.com/goplus/llar/formula",
+			"github.com/MeteorsLiu/llar/formula",
 		},
 		Import: []*modfile.Import{
 			{
 				Name: "autotools",
-				Path: "github.com/goplus/llar/x/autotools",
+				Path: "github.com/MeteorsLiu/llar/x/autotools",
 			},
 			{
 				Name: "cmake",
-				Path: "github.com/goplus/llar/x/cmake",
+				Path: "github.com/MeteorsLiu/llar/x/cmake",
 			},
 		},
 	})

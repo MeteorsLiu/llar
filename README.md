@@ -4,9 +4,9 @@
 
 # LLAR
 
-[![Test](https://github.com/goplus/llar/actions/workflows/go.yml/badge.svg)](https://github.com/goplus/llar/actions/workflows/go.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/goplus/llar)](https://goreportcard.com/report/github.com/goplus/llar)
-[![codecov](https://codecov.io/gh/goplus/llar/branch/main/graph/badge.svg)](https://codecov.io/gh/goplus/llar)
+[![Test](https://github.com/MeteorsLiu/llar/actions/workflows/go.yml/badge.svg)](https://github.com/MeteorsLiu/llar/actions/workflows/go.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/MeteorsLiu/llar)](https://goreportcard.com/report/github.com/MeteorsLiu/llar)
+[![codecov](https://codecov.io/gh/MeteorsLiu/llar/branch/main/graph/badge.svg)](https://codecov.io/gh/MeteorsLiu/llar)
 [![Language](https://img.shields.io/badge/language-XGo-blue.svg)](https://github.com/goplus/gop)
 
 LLAR is a cloud-based multi-language package manager built with [XGo](https://github.com/goplus/gop). It resolves dependencies, downloads source code, and builds libraries from source using declarative formulas.
@@ -14,7 +14,7 @@ LLAR is a cloud-based multi-language package manager built with [XGo](https://gi
 ## Installation
 
 ```bash
-go install -ldflags="-checklinkname=0" github.com/goplus/llar/cmd/llar@latest
+go install -ldflags="-checklinkname=0" github.com/MeteorsLiu/llar/cmd/llar@latest
 ```
 
 ## Usage

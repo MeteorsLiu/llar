@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/formula/repo"
-	"github.com/goplus/llar/internal/modules"
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/formula"
+	"github.com/MeteorsLiu/llar/internal/formula/repo"
+	"github.com/MeteorsLiu/llar/internal/modules"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 func TestParseModuleArg(t *testing.T) {

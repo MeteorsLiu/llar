@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 // Graph implements an incremental version of the MVS algorithm, with the

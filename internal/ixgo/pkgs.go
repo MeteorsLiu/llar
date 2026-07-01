@@ -4,13 +4,13 @@
 
 package ixgo
 
-//go:generate qexp -outdir pkg github.com/goplus/llar/formula
-//go:generate qexp -outdir pkg github.com/goplus/llar/mod/versions
+//go:generate qexp -outdir pkg github.com/MeteorsLiu/llar/formula
+//go:generate qexp -outdir pkg github.com/MeteorsLiu/llar/mod/versions
 //go:generate qexp -outdir pkg golang.org/x/mod/semver
-//go:generate qexp -outdir pkg github.com/goplus/llar/x/gnu
-//go:generate qexp -outdir pkg github.com/goplus/llar/x/autotools
-//go:generate qexp -outdir pkg github.com/goplus/llar/x/cmake
-//go:generate qexp -outdir pkg github.com/goplus/llar/mod/module
+//go:generate qexp -outdir pkg github.com/MeteorsLiu/llar/x/gnu
+//go:generate qexp -outdir pkg github.com/MeteorsLiu/llar/x/autotools
+//go:generate qexp -outdir pkg github.com/MeteorsLiu/llar/x/cmake
+//go:generate qexp -outdir pkg github.com/MeteorsLiu/llar/mod/module
 //go:generate qexp -outdir pkg github.com/qiniu/x/gsh
 import (
 	_ "github.com/goplus/ixgo/pkg/archive/tar"
@@ -178,13 +178,13 @@ import (
 	// _ "github.com/goplus/ixgo/pkg/testing/iotest"
 	// _ "github.com/goplus/ixgo/pkg/testing/quick"
 	// _ "github.com/goplus/ixgo/pkg/testing/slogtest"
-	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/formula"
-	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/mod/module"
-	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/mod/versions"
-	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/autotools"
-	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/cmake"
-	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/gnu"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo/pkg/github.com/MeteorsLiu/llar/formula"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo/pkg/github.com/MeteorsLiu/llar/mod/module"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo/pkg/github.com/MeteorsLiu/llar/mod/versions"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo/pkg/github.com/MeteorsLiu/llar/x/autotools"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo/pkg/github.com/MeteorsLiu/llar/x/cmake"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo/pkg/github.com/MeteorsLiu/llar/x/gnu"
 
-	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/qiniu/x/gsh"
-	_ "github.com/goplus/llar/internal/ixgo/pkg/golang.org/x/mod/semver"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo/pkg/github.com/qiniu/x/gsh"
+	_ "github.com/MeteorsLiu/llar/internal/ixgo/pkg/golang.org/x/mod/semver"
 )

@@ -3,7 +3,7 @@
 package gnu
 
 import (
-	q "github.com/goplus/llar/x/gnu"
+	q "github.com/MeteorsLiu/llar/x/gnu"
 
 	"reflect"
 
@@ -13,7 +13,7 @@ import (
 func init() {
 	ixgo.RegisterPackage(&ixgo.Package{
 		Name:       "gnu",
-		Path:       "github.com/goplus/llar/x/gnu",
+		Path:       "github.com/MeteorsLiu/llar/x/gnu",
 		Deps:       map[string]string{},
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{},

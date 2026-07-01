@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 var tests = `

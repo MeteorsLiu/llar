@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goplus/llar/internal/vcs"
+	"github.com/MeteorsLiu/llar/internal/vcs"
 )
 
 // mockRepo is a mock implementation of vcs.Repo for testing

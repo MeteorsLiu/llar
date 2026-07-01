@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	classfile "github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/formula/repo"
-	"github.com/goplus/llar/internal/modules"
-	"github.com/goplus/llar/internal/vcs"
-	"github.com/goplus/llar/mod/module"
+	classfile "github.com/MeteorsLiu/llar/formula"
+	"github.com/MeteorsLiu/llar/internal/formula/repo"
+	"github.com/MeteorsLiu/llar/internal/modules"
+	"github.com/MeteorsLiu/llar/internal/vcs"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 // mod creates a Module with the given path, version, and direct deps.

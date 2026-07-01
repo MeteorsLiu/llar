@@ -3,7 +3,7 @@
 package formula
 
 import (
-	q "github.com/goplus/llar/formula"
+	q "github.com/MeteorsLiu/llar/formula"
 
 	"go/constant"
 	"reflect"
@@ -14,13 +14,13 @@ import (
 func init() {
 	ixgo.RegisterPackage(&ixgo.Package{
 		Name: "formula",
-		Path: "github.com/goplus/llar/formula",
+		Path: "github.com/MeteorsLiu/llar/formula",
 		Deps: map[string]string{
-			"github.com/goplus/llar/mod/module": "module",
-			"github.com/qiniu/x/gsh":            "gsh",
-			"io/fs":                             "fs",
-			"slices":                            "slices",
-			"sort":                              "sort",
+			"github.com/MeteorsLiu/llar/mod/module": "module",
+			"github.com/qiniu/x/gsh":                "gsh",
+			"io/fs":                                 "fs",
+			"slices":                                "slices",
+			"sort":                                  "sort",
 		},
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{

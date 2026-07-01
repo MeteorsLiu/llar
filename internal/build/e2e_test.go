@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/internal/modules"
-	"github.com/goplus/llar/internal/vcs"
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/internal/modules"
+	"github.com/MeteorsLiu/llar/internal/vcs"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 // ---------------------------------------------------------------------------

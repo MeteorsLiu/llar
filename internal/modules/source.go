@@ -11,10 +11,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/MeteorsLiu/llar/internal/formula"
+	"github.com/MeteorsLiu/llar/mod/module"
+	"github.com/MeteorsLiu/llar/x/gnu"
 	"github.com/goplus/ixgo/xgobuild"
-	"github.com/goplus/llar/internal/formula"
-	"github.com/goplus/llar/mod/module"
-	"github.com/goplus/llar/x/gnu"
 	"github.com/goplus/xgo/ast"
 	"github.com/goplus/xgo/parser"
 )

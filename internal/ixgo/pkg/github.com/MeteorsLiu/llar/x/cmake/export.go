@@ -3,7 +3,7 @@
 package cmake
 
 import (
-	q "github.com/goplus/llar/x/cmake"
+	q "github.com/MeteorsLiu/llar/x/cmake"
 
 	"reflect"
 
@@ -13,7 +13,7 @@ import (
 func init() {
 	ixgo.RegisterPackage(&ixgo.Package{
 		Name: "cmake",
-		Path: "github.com/goplus/llar/x/cmake",
+		Path: "github.com/MeteorsLiu/llar/x/cmake",
 		Deps: map[string]string{
 			"os":            "os",
 			"os/exec":       "exec",

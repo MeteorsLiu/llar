@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/goplus/llar/mod/module"
+	"github.com/MeteorsLiu/llar/mod/module"
 )
 
 // Versions represents a module's version file containing its dependencies.
