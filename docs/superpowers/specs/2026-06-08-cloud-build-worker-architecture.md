@@ -96,14 +96,16 @@ Public interface:
 ```go
 package build
 
+import "github.com/goplus/llar/formula"
+
 type Target struct {
 	Module  string
 	Version string
 }
 
 type Request struct {
-	Target    Target
-	MatrixStr string
+	Target Target
+	Matrix formula.Matrix
 }
 
 type TargetArtifact struct {
