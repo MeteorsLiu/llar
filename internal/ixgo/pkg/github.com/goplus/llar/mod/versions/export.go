@@ -1,9 +1,9 @@
 // export by github.com/goplus/ixgo/cmd/qexp
 
-package module
+package versions
 
 import (
-	q "github.com/MeteorsLiu/llar/mod/module"
+	q "github.com/goplus/llar/mod/versions"
 
 	"reflect"
 
@@ -12,19 +12,23 @@ import (
 
 func init() {
 	ixgo.RegisterPackage(&ixgo.Package{
-		Name: "module",
-		Path: "github.com/MeteorsLiu/llar/mod/module",
+		Name: "versions",
+		Path: "github.com/goplus/llar/mod/versions",
 		Deps: map[string]string{
-			"path/filepath": "filepath",
+			"bytes":                             "bytes",
+			"encoding/json":                     "json",
+			"github.com/goplus/llar/mod/module": "module",
+			"io":                                "io",
+			"os":                                "os",
 		},
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{
-			"Version": reflect.TypeOf((*q.Version)(nil)).Elem(),
+			"Versions": reflect.TypeOf((*q.Versions)(nil)).Elem(),
 		},
 		AliasTypes: map[string]reflect.Type{},
 		Vars:       map[string]reflect.Value{},
 		Funcs: map[string]reflect.Value{
-			"EscapePath": reflect.ValueOf(q.EscapePath),
+			"Parse": reflect.ValueOf(q.Parse),
 		},
 		TypedConsts:   map[string]ixgo.TypedConst{},
 		UntypedConsts: map[string]ixgo.UntypedConst{},

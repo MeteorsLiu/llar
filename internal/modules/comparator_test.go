@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/MeteorsLiu/llar/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 // testStruct is used for testing reflection utilities

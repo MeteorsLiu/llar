@@ -9,14 +9,14 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/MeteorsLiu/llar/internal/formula"
-	"github.com/MeteorsLiu/llar/internal/formula/repo"
-	"github.com/MeteorsLiu/llar/internal/mvs"
-	"github.com/MeteorsLiu/llar/internal/vcs"
-	"github.com/MeteorsLiu/llar/mod/module"
-	"github.com/MeteorsLiu/llar/mod/versions"
+	"github.com/goplus/llar/internal/formula"
+	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/mvs"
+	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/mod/module"
+	"github.com/goplus/llar/mod/versions"
 
-	classfile "github.com/MeteorsLiu/llar/formula"
+	classfile "github.com/goplus/llar/formula"
 )
 
 func validateModulePath(modPath string) error {

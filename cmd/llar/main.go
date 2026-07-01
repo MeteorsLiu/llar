@@ -1,7 +1,7 @@
 package main
 
 import (
-	cmd "github.com/MeteorsLiu/llar/cmd/llar/internal"
+	cmd "github.com/goplus/llar/cmd/llar/internal"
 )
 
 func main() {

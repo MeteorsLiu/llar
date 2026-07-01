@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MeteorsLiu/llar/formula"
-	"github.com/MeteorsLiu/llar/internal/artifact"
-	"github.com/MeteorsLiu/llar/internal/upload"
+	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/artifact"
+	"github.com/goplus/llar/internal/upload"
 )
 
 func TestBuildReturnsStoredArtifactWithoutRunningMakeOrUpload(t *testing.T) {

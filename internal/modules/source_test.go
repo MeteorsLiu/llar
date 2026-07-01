@@ -7,10 +7,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/MeteorsLiu/llar/internal/formula/repo"
-	"github.com/MeteorsLiu/llar/internal/vcs"
-	"github.com/MeteorsLiu/llar/mod/module"
 	"github.com/goplus/ixgo/xgobuild"
+	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/xgo/ast"
 	"github.com/goplus/xgo/parser"
 )

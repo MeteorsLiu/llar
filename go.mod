@@ -1,4 +1,4 @@
-module github.com/MeteorsLiu/llar
+module github.com/goplus/llar
 
 go 1.24.0
 

@@ -7,7 +7,7 @@ package formula
 import (
 	"io/fs"
 
-	"github.com/MeteorsLiu/llar/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 // -----------------------------------------------------------------------------

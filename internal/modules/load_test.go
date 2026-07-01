@@ -8,11 +8,11 @@ import (
 	"slices"
 	"testing"
 
-	classfile "github.com/MeteorsLiu/llar/formula"
-	"github.com/MeteorsLiu/llar/internal/formula"
-	"github.com/MeteorsLiu/llar/internal/formula/repo"
-	"github.com/MeteorsLiu/llar/internal/vcs"
-	"github.com/MeteorsLiu/llar/mod/module"
+	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/formula"
+	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/mod/module"
 )
 
 // mockVCSRepo implements vcs.Repo for testing without network access.

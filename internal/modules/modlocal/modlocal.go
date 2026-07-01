@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/MeteorsLiu/llar/mod/versions"
+	"github.com/goplus/llar/mod/versions"
 )
 
 // Module represents a module discovered from the local filesystem.

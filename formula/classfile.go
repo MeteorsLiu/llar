@@ -8,7 +8,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/MeteorsLiu/llar/mod/module"
+	"github.com/goplus/llar/mod/module"
 	"github.com/qiniu/x/gsh"
 )
 

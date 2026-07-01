@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/MeteorsLiu/llar/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 // BuildListError decorates an error that occurred gathering requirements

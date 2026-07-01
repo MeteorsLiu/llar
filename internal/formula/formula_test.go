@@ -9,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	formulapkg "github.com/MeteorsLiu/llar/formula"
+	formulapkg "github.com/goplus/llar/formula"
 )
 
 func TestLoadFS(t *testing.T) {

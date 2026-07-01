@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/MeteorsLiu/llar/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 func TestParse_WithData(t *testing.T) {

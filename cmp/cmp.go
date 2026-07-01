@@ -4,7 +4,7 @@
 
 package cmp
 
-import "github.com/MeteorsLiu/llar/mod/module"
+import "github.com/goplus/llar/mod/module"
 
 const GopPackage = true
 

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"unsafe"
 
-	_ "github.com/MeteorsLiu/llar/internal/ixgo"
-	"github.com/MeteorsLiu/llar/mod/module"
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
+	_ "github.com/goplus/llar/internal/ixgo"
+	"github.com/goplus/llar/mod/module"
 )
 
 // loadComparator loads a version comparator from a .gox file at the given path.

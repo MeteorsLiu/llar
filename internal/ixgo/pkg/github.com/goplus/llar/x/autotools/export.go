@@ -1,9 +1,9 @@
 // export by github.com/goplus/ixgo/cmd/qexp
 
-package versions
+package autotools
 
 import (
-	q "github.com/MeteorsLiu/llar/mod/versions"
+	q "github.com/goplus/llar/x/autotools"
 
 	"reflect"
 
@@ -12,23 +12,22 @@ import (
 
 func init() {
 	ixgo.RegisterPackage(&ixgo.Package{
-		Name: "versions",
-		Path: "github.com/MeteorsLiu/llar/mod/versions",
+		Name: "autotools",
+		Path: "github.com/goplus/llar/x/autotools",
 		Deps: map[string]string{
-			"bytes":                                 "bytes",
-			"encoding/json":                         "json",
-			"github.com/MeteorsLiu/llar/mod/module": "module",
-			"io":                                    "io",
-			"os":                                    "os",
+			"os":            "os",
+			"os/exec":       "exec",
+			"path/filepath": "filepath",
+			"runtime":       "runtime",
 		},
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{
-			"Versions": reflect.TypeOf((*q.Versions)(nil)).Elem(),
+			"AutoTools": reflect.TypeOf((*q.AutoTools)(nil)).Elem(),
 		},
 		AliasTypes: map[string]reflect.Type{},
 		Vars:       map[string]reflect.Value{},
 		Funcs: map[string]reflect.Value{
-			"Parse": reflect.ValueOf(q.Parse),
+			"New": reflect.ValueOf(q.New),
 		},
 		TypedConsts:   map[string]ixgo.TypedConst{},
 		UntypedConsts: map[string]ixgo.UntypedConst{},

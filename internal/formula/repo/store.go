@@ -10,9 +10,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/MeteorsLiu/llar/internal/lockedfile"
-	"github.com/MeteorsLiu/llar/internal/vcs"
-	"github.com/MeteorsLiu/llar/mod/module"
+	"github.com/goplus/llar/internal/lockedfile"
+	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/mod/module"
 )
 
 // Store provides access to module formulas through a filesystem abstraction.

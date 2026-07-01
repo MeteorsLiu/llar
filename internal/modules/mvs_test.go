@@ -3,8 +3,8 @@ package modules
 import (
 	"testing"
 
-	"github.com/MeteorsLiu/llar/internal/mvs"
-	"github.com/MeteorsLiu/llar/mod/module"
+	"github.com/goplus/llar/internal/mvs"
+	"github.com/goplus/llar/mod/module"
 )
 
 func TestMvsReqs_Max(t *testing.T) {

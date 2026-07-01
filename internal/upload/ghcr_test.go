@@ -161,7 +161,7 @@ func TestGHCRUploaderPassesConfiguredUsernameToWriter(t *testing.T) {
 	writer := &recordingIndexWriter{}
 	uploader := ghcrUploader{
 		cfg: GHCRConfig{
-			Owner:    "MeteorsLiu",
+			Owner:    "goplus",
 			Username: "MeteorsLiu",
 			Token:    "publish-token",
 		},
@@ -169,7 +169,7 @@ func TestGHCRUploaderPassesConfiguredUsernameToWriter(t *testing.T) {
 	}
 
 	if _, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("archive")), Options{
-		Name: "MeteorsLiu/llar:test",
+		Name: "goplus/llar:test",
 		Type: "tar.gz",
 	}); err != nil {
 		t.Fatalf("Upload: %v", err)

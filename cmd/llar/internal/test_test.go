@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MeteorsLiu/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/formula/repo"
 )
 
 // runTestCmd mirrors runMakeCmd for the `llar test` subcommand. It executes
