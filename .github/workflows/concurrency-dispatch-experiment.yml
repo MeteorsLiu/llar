@@ -1,0 +1,39 @@
+name: Concurrency Dispatch Experiment
+
+run-name: concurrency-${{ inputs.run_id }}-${{ inputs.group }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      group:
+        description: Concurrency group suffix.
+        required: true
+        type: string
+      run_id:
+        description: Caller-provided run label.
+        required: true
+        type: string
+      sleep_seconds:
+        description: Seconds to keep the run active.
+        required: true
+        default: "60"
+        type: string
+
+concurrency:
+  group: gha-concurrency-experiment-${{ inputs.group }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  hold:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print inputs
+        run: |
+          echo "group=${{ inputs.group }}"
+          echo "run_id=${{ inputs.run_id }}"
+          echo "sleep_seconds=${{ inputs.sleep_seconds }}"
+      - name: Hold slot
+        run: sleep "${{ inputs.sleep_seconds }}"
