@@ -26,6 +26,8 @@ type GHCRConfig struct {
 	SourceURL string
 }
 
+const ociSourceLabel = "org.opencontainers.image.source"
+
 func NewGHCR(cfg GHCRConfig) Uploader {
 	return ghcrUploader{
 		cfg:        cfg,
@@ -167,31 +169,56 @@ func buildIndex(payload []byte, layerType types.MediaType, attrs map[string]stri
 		return nil, err
 	}
 	sourceURL = strings.TrimSpace(sourceURL)
-	if sourceURL != "" {
+	osName := strings.TrimSpace(attrs["os"])
+	archName := strings.TrimSpace(attrs["arch"])
+	if sourceURL != "" || osName != "" || archName != "" {
 		cfg, err := img.ConfigFile()
 		if err != nil {
 			return nil, err
 		}
 		cfg = cfg.DeepCopy()
-		if cfg.Config.Labels == nil {
-			cfg.Config.Labels = map[string]string{}
+		if sourceURL != "" {
+			if cfg.Config.Labels == nil {
+				cfg.Config.Labels = map[string]string{}
+			}
+			cfg.Config.Labels[ociSourceLabel] = sourceURL
 		}
-		cfg.Config.Labels["org.opencontainers.image.source"] = sourceURL
+		if osName != "" {
+			cfg.OS = osName
+		}
+		if archName != "" {
+			cfg.Architecture = archName
+		}
 		img, err = mutate.ConfigFile(img, cfg)
 		if err != nil {
 			return nil, err
 		}
 	}
+	if sourceURL != "" {
+		img = mutate.Annotations(img, map[string]string{
+			ociSourceLabel: sourceURL,
+		}).(v1.Image)
+	}
 	img = mutate.MediaType(img, types.OCIManifestSchema1)
-	return mutate.IndexMediaType(mutate.AppendManifests(empty.Index, mutate.IndexAddendum{
+	descriptorAnnotations := map[string]string{
+		"org.llar.matrix": attrs["org.llar.matrix"],
+	}
+	if sourceURL != "" {
+		descriptorAnnotations[ociSourceLabel] = sourceURL
+	}
+	index := mutate.IndexMediaType(mutate.AppendManifests(empty.Index, mutate.IndexAddendum{
 		Add: img,
 		Descriptor: v1.Descriptor{
-			Annotations: map[string]string{
-				"org.llar.matrix": attrs["org.llar.matrix"],
-			},
-			Platform: platformFromAttrs(attrs),
+			Annotations: descriptorAnnotations,
+			Platform:    platformFromAttrs(attrs),
 		},
-	}), types.OCIImageIndex), nil
+	}), types.OCIImageIndex)
+	if sourceURL != "" {
+		index = mutate.Annotations(index, map[string]string{
+			ociSourceLabel: sourceURL,
+		}).(v1.ImageIndex)
+	}
+	return index, nil
 }
 
 func platformFromAttrs(attrs map[string]string) *v1.Platform {

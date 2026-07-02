@@ -127,12 +127,18 @@ func TestGHCRUploaderWritesOCIIndexWithArtifactLayer(t *testing.T) {
 	if manifest.MediaType != types.OCIImageIndex {
 		t.Fatalf("index media type = %q", manifest.MediaType)
 	}
+	if manifest.Annotations[ociSourceLabel] != "https://github.com/example/llar" {
+		t.Fatalf("index source annotation = %q", manifest.Annotations[ociSourceLabel])
+	}
 	if len(manifest.Manifests) != 1 {
 		t.Fatalf("manifests = %+v", manifest.Manifests)
 	}
 	entry := manifest.Manifests[0]
 	if entry.Annotations["org.llar.matrix"] != "amd64-linux" {
 		t.Fatalf("annotations = %+v", entry.Annotations)
+	}
+	if entry.Annotations[ociSourceLabel] != "https://github.com/example/llar" {
+		t.Fatalf("descriptor source annotation = %q", entry.Annotations[ociSourceLabel])
 	}
 	if entry.Platform == nil || entry.Platform.OS != "linux" || entry.Platform.Architecture != "amd64" {
 		t.Fatalf("platform = %+v", entry.Platform)
@@ -149,12 +155,18 @@ func TestGHCRUploaderWritesOCIIndexWithArtifactLayer(t *testing.T) {
 	if imgManifest.MediaType != types.OCIManifestSchema1 {
 		t.Fatalf("image manifest media type = %q", imgManifest.MediaType)
 	}
+	if imgManifest.Annotations[ociSourceLabel] != "https://github.com/example/llar" {
+		t.Fatalf("image source annotation = %q", imgManifest.Annotations[ociSourceLabel])
+	}
 	cfg, err := img.ConfigFile()
 	if err != nil {
 		t.Fatalf("ConfigFile: %v", err)
 	}
-	if cfg.Config.Labels["org.opencontainers.image.source"] != "https://github.com/example/llar" {
-		t.Fatalf("source label = %q", cfg.Config.Labels["org.opencontainers.image.source"])
+	if cfg.Config.Labels[ociSourceLabel] != "https://github.com/example/llar" {
+		t.Fatalf("source label = %q", cfg.Config.Labels[ociSourceLabel])
+	}
+	if cfg.OS != "linux" || cfg.Architecture != "amd64" {
+		t.Fatalf("config platform = %s/%s, want linux/amd64", cfg.OS, cfg.Architecture)
 	}
 	if len(imgManifest.Layers) != 1 {
 		t.Fatalf("layers = %+v", imgManifest.Layers)
