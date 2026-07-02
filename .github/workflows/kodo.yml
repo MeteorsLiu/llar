@@ -13,13 +13,32 @@ concurrency:
 
 jobs:
   kodo:
+    name: llar make -> Kodo -> Postgres
     runs-on: ubuntu-latest
+    environment: kodo-e2e
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: llar
+          POSTGRES_PASSWORD: llar
+          POSTGRES_DB: llar_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llar -d llar_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Check out code
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -54,4 +73,5 @@ jobs:
           QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
           QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
           QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
+          POSTGRES_DSN: host=localhost port=5432 user=llar password=llar dbname=llar_e2e sslmode=disable
         run: go test -v -ldflags="-checklinkname=0" ./internal/build/cache -run '^TestKodoE2E_' -count=1
