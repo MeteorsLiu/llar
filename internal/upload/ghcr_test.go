@@ -18,7 +18,12 @@ import (
 var errTestUpload = errors.New("test upload error")
 
 func TestNewGHCRReturnsGHCRUploader(t *testing.T) {
-	uploader := NewGHCR(GHCRConfig{Owner: "MeteorsLiu", Username: "MeteorsLiu", Token: "token"})
+	uploader := NewGHCR(GHCRConfig{
+		Owner:     "MeteorsLiu",
+		Username:  "MeteorsLiu",
+		Token:     "token",
+		SourceURL: "https://github.com/example/llar",
+	})
 	if uploader.Type() != "ghcr" {
 		t.Fatalf("Type = %q, want ghcr", uploader.Type())
 	}
@@ -26,7 +31,7 @@ func TestNewGHCRReturnsGHCRUploader(t *testing.T) {
 	if !ok {
 		t.Fatalf("NewGHCR returned %T, want ghcrUploader", uploader)
 	}
-	if got.cfg.Owner != "MeteorsLiu" || got.cfg.Username != "MeteorsLiu" || got.cfg.Token != "token" {
+	if got.cfg.Owner != "MeteorsLiu" || got.cfg.Username != "MeteorsLiu" || got.cfg.Token != "token" || got.cfg.SourceURL != "https://github.com/example/llar" {
 		t.Fatalf("config = %+v", got.cfg)
 	}
 	if got.writeIndex == nil {
@@ -92,7 +97,7 @@ func TestGHCRUploaderWritesOCIIndexWithArtifactLayer(t *testing.T) {
 	}
 
 	uploader := ghcrUploader{
-		cfg:        GHCRConfig{Owner: "example", Token: "publish-token"},
+		cfg:        GHCRConfig{Owner: "example", Token: "publish-token", SourceURL: "https://github.com/example/llar"},
 		writeIndex: writer.write,
 	}
 	got, err := uploader.Upload(context.Background(), r, Options{
@@ -143,6 +148,13 @@ func TestGHCRUploaderWritesOCIIndexWithArtifactLayer(t *testing.T) {
 	}
 	if imgManifest.MediaType != types.OCIManifestSchema1 {
 		t.Fatalf("image manifest media type = %q", imgManifest.MediaType)
+	}
+	cfg, err := img.ConfigFile()
+	if err != nil {
+		t.Fatalf("ConfigFile: %v", err)
+	}
+	if cfg.Config.Labels["org.opencontainers.image.source"] != "https://github.com/example/llar" {
+		t.Fatalf("source label = %q", cfg.Config.Labels["org.opencontainers.image.source"])
 	}
 	if len(imgManifest.Layers) != 1 {
 		t.Fatalf("layers = %+v", imgManifest.Layers)

@@ -20,9 +20,10 @@ import (
 )
 
 type GHCRConfig struct {
-	Owner    string
-	Username string
-	Token    string
+	Owner     string
+	Username  string
+	Token     string
+	SourceURL string
 }
 
 func NewGHCR(cfg GHCRConfig) Uploader {
@@ -69,7 +70,7 @@ func (u ghcrUploader) Upload(ctx context.Context, r io.ReadSeeker, opts Options)
 		return Result{}, err
 	}
 
-	index, err := buildIndex(payload, layerType, opts.Attrs)
+	index, err := buildIndex(payload, layerType, opts.Attrs, u.cfg.SourceURL)
 	if err != nil {
 		return Result{}, err
 	}
@@ -156,7 +157,7 @@ func layerMediaType(archiveType string) (types.MediaType, error) {
 	}
 }
 
-func buildIndex(payload []byte, layerType types.MediaType, attrs map[string]string) (v1.ImageIndex, error) {
+func buildIndex(payload []byte, layerType types.MediaType, attrs map[string]string, sourceURL string) (v1.ImageIndex, error) {
 	layer := static.NewLayer(payload, layerType)
 	img, err := mutate.Append(empty.Image, mutate.Addendum{
 		Layer:     layer,
@@ -164,6 +165,22 @@ func buildIndex(payload []byte, layerType types.MediaType, attrs map[string]stri
 	})
 	if err != nil {
 		return nil, err
+	}
+	sourceURL = strings.TrimSpace(sourceURL)
+	if sourceURL != "" {
+		cfg, err := img.ConfigFile()
+		if err != nil {
+			return nil, err
+		}
+		cfg = cfg.DeepCopy()
+		if cfg.Config.Labels == nil {
+			cfg.Config.Labels = map[string]string{}
+		}
+		cfg.Config.Labels["org.opencontainers.image.source"] = sourceURL
+		img, err = mutate.ConfigFile(img, cfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 	img = mutate.MediaType(img, types.OCIManifestSchema1)
 	return mutate.IndexMediaType(mutate.AppendManifests(empty.Index, mutate.IndexAddendum{

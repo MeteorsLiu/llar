@@ -32,8 +32,16 @@ func TestGHCRUploadIntegrationMeteorsLiuLlar(t *testing.T) {
 	if username == "" {
 		t.Skip("set GHCR_USERNAME or GITHUB_ACTOR to run live GHCR upload")
 	}
+	owner := getenvDefault("GHCR_OWNER", "MeteorsLiu")
+	pkg := getenvDefault("GHCR_PACKAGE", "llar")
+	sourceURL := getenvDefault("GHCR_SOURCE_URL", "https://github.com/MeteorsLiu/llar")
 
-	uploader := NewGHCR(GHCRConfig{Owner: "MeteorsLiu", Username: username, Token: token})
+	uploader := NewGHCR(GHCRConfig{
+		Owner:     owner,
+		Username:  username,
+		Token:     token,
+		SourceURL: sourceURL,
+	})
 	artifactPath := buildZlibArtifact(t)
 	artifact, err := os.Open(artifactPath)
 	if err != nil {
@@ -43,7 +51,7 @@ func TestGHCRUploadIntegrationMeteorsLiuLlar(t *testing.T) {
 
 	tag := "llard-upload-test-" + time.Now().UTC().Format("20060102T150405Z")
 	got, err := uploader.Upload(context.Background(), artifact, Options{
-		Name: "MeteorsLiu/llar",
+		Name: owner + "/" + pkg,
 		Tag:  tag,
 		Type: "tar.gz",
 		Attrs: map[string]string{
@@ -58,9 +66,17 @@ func TestGHCRUploadIntegrationMeteorsLiuLlar(t *testing.T) {
 	t.Logf("uploaded tag: %s", tag)
 	t.Logf("uploaded url: %s", got.URL)
 	t.Logf("uploaded size: %d", got.Size)
-	if !strings.HasPrefix(got.URL, "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:") {
+	wantPrefix := "https://ghcr.io/v2/" + strings.ToLower(owner+"/"+pkg) + "/blobs/sha256:"
+	if !strings.HasPrefix(got.URL, wantPrefix) {
 		t.Fatalf("URL = %q", got.URL)
 	}
+}
+
+func getenvDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func buildZlibArtifact(t *testing.T) string {
@@ -84,7 +100,7 @@ func buildZlibArtifact(t *testing.T) string {
 		t.Fatalf("Stat output: %v", err)
 	}
 	if !info.IsDir() {
-		t.Fatalf("llar make output %s is not a directory", outputDir)
+		return outputDir
 	}
 
 	metadata := strings.TrimSpace(string(out))
