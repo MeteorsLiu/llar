@@ -1,4 +1,4 @@
-package upload
+package uploader
 
 import (
 	"bytes"
@@ -18,65 +18,9 @@ import (
 var errTestUpload = errors.New("test upload error")
 
 func TestNewGHCRReturnsGHCRUploader(t *testing.T) {
-	uploader := NewGHCR(GHCRConfig{Owner: "MeteorsLiu", Username: "MeteorsLiu", Token: "token"})
-	if uploader.Type() != "ghcr" {
-		t.Fatalf("Type = %q, want ghcr", uploader.Type())
-	}
-	got, ok := uploader.(ghcrUploader)
-	if !ok {
-		t.Fatalf("NewGHCR returned %T, want ghcrUploader", uploader)
-	}
-	if got.cfg.Owner != "MeteorsLiu" || got.cfg.Username != "MeteorsLiu" || got.cfg.Token != "token" {
-		t.Fatalf("config = %+v", got.cfg)
-	}
-	if got.writeIndex == nil {
-		t.Fatal("writeIndex is nil")
-	}
-}
-
-func TestChecksumResultReadsFromCurrentOffsetAndRestoresReader(t *testing.T) {
-	r := bytes.NewReader([]byte("prefixartifact-bytes"))
-	if _, err := r.Seek(int64(len("prefix")), io.SeekStart); err != nil {
-		t.Fatalf("Seek: %v", err)
-	}
-
-	got, err := checksumResult(r)
-	if err != nil {
-		t.Fatalf("checksumResult: %v", err)
-	}
-
-	payload := []byte("artifact-bytes")
-	sum := sha256.Sum256(payload)
-	if got.Size != int64(len(payload)) {
-		t.Fatalf("Size = %d, want %d", got.Size, len(payload))
-	}
-	if got.Checksum != hex.EncodeToString(sum[:]) {
-		t.Fatalf("Checksum = %q", got.Checksum)
-	}
-	offset, err := r.Seek(0, io.SeekCurrent)
-	if err != nil {
-		t.Fatalf("Seek current: %v", err)
-	}
-	if offset != int64(len("prefix")) {
-		t.Fatalf("offset = %d, want %d", offset, len("prefix"))
-	}
-}
-
-func TestChecksumResultReportsReaderErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		r    io.ReadSeeker
-	}{
-		{name: "initial seek", r: seekErrorReader{}},
-		{name: "read", r: readErrorSeeker{}},
-		{name: "restore seek", r: &secondSeekErrorReader{Reader: bytes.NewReader([]byte("archive"))}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := checksumResult(tt.r); !errors.Is(err, errTestUpload) {
-				t.Fatalf("checksumResult error = %v, want %v", err, errTestUpload)
-			}
-		})
+	got := NewGHCR(GHCRConfig{Owner: "MeteorsLiu", Username: "MeteorsLiu", Token: "token"})
+	if got.Type() != "ghcr" {
+		t.Fatalf("Type = %q, want ghcr", got.Type())
 	}
 }
 
@@ -91,10 +35,7 @@ func TestGHCRUploaderWritesOCIIndexWithArtifactLayer(t *testing.T) {
 		t.Fatalf("Seek: %v", err)
 	}
 
-	uploader := ghcrUploader{
-		cfg:        GHCRConfig{Owner: "example", Token: "publish-token"},
-		writeIndex: writer.write,
-	}
+	uploader := newGHCR(GHCRConfig{Owner: "example", Token: "publish-token"}, ghcrOptions{writeIndex: writer.write})
 	got, err := uploader.Upload(context.Background(), r, Options{
 		Name: "ghcr.io/example/madler/zlib",
 		Tag:  "v1.3.1",
@@ -173,12 +114,26 @@ func TestGHCRUploaderWritesOCIIndexWithArtifactLayer(t *testing.T) {
 	}
 }
 
+func TestBuildIndexWritesSourceAnnotation(t *testing.T) {
+	index, err := buildIndex([]byte("archive"), types.OCILayer, map[string]string{
+		"org.llar.matrix": "amd64-linux",
+	}, "https://github.com/MeteorsLiu/llar")
+	if err != nil {
+		t.Fatalf("buildIndex: %v", err)
+	}
+	manifest, err := index.IndexManifest()
+	if err != nil {
+		t.Fatalf("IndexManifest: %v", err)
+	}
+	got := manifest.Manifests[0].Annotations["org.opencontainers.image.source"]
+	if got != "https://github.com/MeteorsLiu/llar" {
+		t.Fatalf("source annotation = %q", got)
+	}
+}
+
 func TestGHCRUploaderWritesZstdLayerByDefaultingOwner(t *testing.T) {
 	writer := &recordingIndexWriter{}
-	uploader := ghcrUploader{
-		cfg:        GHCRConfig{Owner: "MeteorsLiu", Username: "MeteorsLiu", Token: "publish-token"},
-		writeIndex: writer.write,
-	}
+	uploader := newGHCR(GHCRConfig{Owner: "MeteorsLiu", Username: "MeteorsLiu", Token: "publish-token"}, ghcrOptions{writeIndex: writer.write})
 
 	_, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("archive")), Options{
 		Name: "llar",
@@ -216,48 +171,47 @@ func TestGHCRUploaderReportsUploadErrors(t *testing.T) {
 		name string
 		r    io.ReadSeeker
 		opts Options
-		u    ghcrUploader
+		u    *ghcr
 	}{
 		{
 			name: "missing tag",
 			r:    bytes.NewReader([]byte("archive")),
 			opts: Options{Name: "MeteorsLiu/llar"},
-			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
+			u:    newGHCR(GHCRConfig{Owner: "MeteorsLiu"}, ghcrOptions{writeIndex: (&recordingIndexWriter{}).write}),
 		},
 		{
 			name: "unsupported archive type",
 			r:    bytes.NewReader([]byte("archive")),
 			opts: Options{Name: "MeteorsLiu/llar", Tag: "test", Type: "zip"},
-			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
+			u:    newGHCR(GHCRConfig{Owner: "MeteorsLiu"}, ghcrOptions{writeIndex: (&recordingIndexWriter{}).write}),
 		},
 		{
 			name: "initial seek",
 			r:    seekErrorReader{},
 			opts: Options{Name: "MeteorsLiu/llar", Tag: "test"},
-			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
+			u:    newGHCR(GHCRConfig{Owner: "MeteorsLiu"}, ghcrOptions{writeIndex: (&recordingIndexWriter{}).write}),
 		},
 		{
 			name: "read",
 			r:    readErrorSeeker{},
 			opts: Options{Name: "MeteorsLiu/llar", Tag: "test"},
-			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
+			u:    newGHCR(GHCRConfig{Owner: "MeteorsLiu"}, ghcrOptions{writeIndex: (&recordingIndexWriter{}).write}),
 		},
 		{
 			name: "restore seek",
 			r:    &secondSeekErrorReader{Reader: bytes.NewReader([]byte("archive"))},
 			opts: Options{Name: "MeteorsLiu/llar", Tag: "test"},
-			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
+			u:    newGHCR(GHCRConfig{Owner: "MeteorsLiu"}, ghcrOptions{writeIndex: (&recordingIndexWriter{}).write}),
 		},
 		{
 			name: "writer",
 			r:    bytes.NewReader([]byte("archive")),
 			opts: Options{Name: "MeteorsLiu/llar", Tag: "test"},
-			u: ghcrUploader{
-				cfg: GHCRConfig{Owner: "MeteorsLiu"},
+			u: newGHCR(GHCRConfig{Owner: "MeteorsLiu"}, ghcrOptions{
 				writeIndex: func(context.Context, string, v1.ImageIndex, string, string) error {
 					return errTestUpload
 				},
-			},
+			}),
 		},
 	}
 	for _, tt := range tests {
@@ -271,10 +225,7 @@ func TestGHCRUploaderReportsUploadErrors(t *testing.T) {
 
 func TestGHCRUploaderAcceptsGitHubStyleOwnerCase(t *testing.T) {
 	writer := &recordingIndexWriter{}
-	uploader := ghcrUploader{
-		cfg:        GHCRConfig{Owner: "MeteorsLiu", Token: "publish-token"},
-		writeIndex: writer.write,
-	}
+	uploader := newGHCR(GHCRConfig{Owner: "MeteorsLiu", Token: "publish-token"}, ghcrOptions{writeIndex: writer.write})
 
 	got, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("archive")), Options{
 		Name: "MeteorsLiu/llar",
@@ -297,14 +248,14 @@ func TestGHCRUploaderAcceptsGitHubStyleOwnerCase(t *testing.T) {
 
 func TestGHCRUploaderPassesConfiguredUsernameToWriter(t *testing.T) {
 	writer := &recordingIndexWriter{}
-	uploader := ghcrUploader{
-		cfg: GHCRConfig{
+	uploader := newGHCR(
+		GHCRConfig{
 			Owner:    "MeteorsLiu",
 			Username: "MeteorsLiu",
 			Token:    "publish-token",
 		},
-		writeIndex: writer.write,
-	}
+		ghcrOptions{writeIndex: writer.write},
+	)
 
 	if _, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("archive")), Options{
 		Name: "MeteorsLiu/llar",
