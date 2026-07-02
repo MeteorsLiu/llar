@@ -116,9 +116,16 @@ func buildZlibWithLLAR(t *testing.T, version, matrix string) (string, string) {
 	if err := os.MkdirAll(cacheHome, 0o755); err != nil {
 		t.Fatalf("create cache home: %v", err)
 	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	userCacheDir, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatalf("UserCacheDir: %v", err)
+	}
 
 	cmd := exec.Command(llar, "make", "madler/zlib@"+version)
-	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CACHE_HOME="+cacheHome)
+	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("llar make madler/zlib@%s failed: %v\n%s", version, err, out)
@@ -129,7 +136,7 @@ func buildZlibWithLLAR(t *testing.T, version, matrix string) (string, string) {
 		t.Fatalf("llar make metadata = %q, want -lz", metadata)
 	}
 
-	installDir := filepath.Join(cacheHome, ".llar", "workspaces", fmt.Sprintf("madler/zlib@%s-%s", version, matrix))
+	installDir := filepath.Join(userCacheDir, ".llar", "workspaces", fmt.Sprintf("madler/zlib@%s-%s", version, matrix))
 	if _, err := os.Stat(filepath.Join(installDir, "include", "zlib.h")); err != nil {
 		t.Fatalf("zlib include not found in %s: %v", installDir, err)
 	}
