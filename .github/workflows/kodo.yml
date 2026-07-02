@@ -29,6 +29,15 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Install LLAR
+        run: |
+          mkdir -p .bin
+          GOBIN="$PWD/.bin" go install -ldflags="-checklinkname=0" ./cmd/llar
+          echo "$PWD/.bin" >> "$GITHUB_PATH"
+
       - name: Check Kodo secrets
         env:
           QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
