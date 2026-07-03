@@ -30,7 +30,10 @@ import (
 	"github.com/qiniu/go-sdk/v7/storagev2/uptoken"
 )
 
-const kodoEntryMetadataKey = "llar-entry"
+const (
+	kodoEntryMetadataKey    = "llar-entry"
+	kodoArtifactMetadataKey = "llar-artifact"
+)
 
 type KodoConfig struct {
 	AccessKey    string
@@ -145,13 +148,31 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		return Entry{}, err
 	}
 	checksum := hex.EncodeToString(hash.Sum(nil))
-	var sourceURL string
+	metadata := map[string]string{
+		kodoEntryMetadataKey: entryMetadata,
+	}
+	var artifactValue artifact.Artifact
 	if c.artifacts != nil {
 		var err error
+		var sourceURL string
 		sourceURL, err = kodoSourceURL(c.publicDomain, objectName)
 		if err != nil {
 			return Entry{}, err
 		}
+		artifactValue = artifact.Artifact{
+			Source: artifact.Source{
+				Type: "kodo",
+				URL:  sourceURL,
+			},
+			Type:     "tar.gz",
+			Metadata: entry.Metadata,
+			Checksum: checksum,
+		}
+		artifactMetadata, err := encodeKodoArtifact(artifactValue)
+		if err != nil {
+			return Entry{}, err
+		}
+		metadata[kodoArtifactMetadataKey] = artifactMetadata
 	}
 
 	err = c.uploader.UploadFile(ctx, file.Name(), &uploader.ObjectOptions{
@@ -160,9 +181,7 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		FileName:    path.Base(objectName),
 		ContentType: "application/gzip",
 		UpToken:     uptoken.NewSigner(putPolicy, c.credentials),
-		Metadata: map[string]string{
-			kodoEntryMetadataKey: entryMetadata,
-		},
+		Metadata:    metadata,
 	}, nil)
 	if err != nil {
 		if isKodoObjectExists(err) {
@@ -175,15 +194,7 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		return Entry{}, err
 	}
 	if c.artifacts != nil {
-		if _, err := c.artifacts.Put(ctx, artifactKey(key), artifact.Artifact{
-			Source: artifact.Source{
-				Type: "kodo",
-				URL:  sourceURL,
-			},
-			Type:     "tar.gz",
-			Metadata: entry.Metadata,
-			Checksum: checksum,
-		}); err != nil {
+		if _, err := c.artifacts.Put(ctx, artifactKey(key), artifactValue); err != nil {
 			return Entry{}, err
 		}
 	}
@@ -312,10 +323,7 @@ func encodeKodoEntry(entry Entry) (string, error) {
 }
 
 func kodoEntryFromMetadata(metadata map[string]string) (Entry, bool) {
-	raw := metadata[kodoEntryMetadataKey]
-	if raw == "" {
-		raw = metadata["x-qn-meta-"+kodoEntryMetadataKey]
-	}
+	raw := kodoMetadataValue(metadata, kodoEntryMetadataKey)
 	if raw == "" {
 		return Entry{}, false
 	}
@@ -328,6 +336,14 @@ func kodoEntryFromMetadata(metadata map[string]string) (Entry, bool) {
 		return Entry{}, false
 	}
 	return entry, true
+}
+
+func kodoMetadataValue(metadata map[string]string, key string) string {
+	value := metadata[key]
+	if value == "" {
+		value = metadata["x-qn-meta-"+key]
+	}
+	return value
 }
 
 func isKodoObjectNotFound(err error) bool {
