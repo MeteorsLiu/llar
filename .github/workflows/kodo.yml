@@ -1,6 +1,12 @@
 name: Kodo E2E
 
 on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+      - "!dependabot/**"
+      - "!xgopilot/**"
   pull_request_target:
     branches: [ "**" ]
 
@@ -36,8 +42,8 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Go
