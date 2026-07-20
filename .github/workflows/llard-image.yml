@@ -2,7 +2,7 @@ name: LLARD Docker Image
 
 on:
   push:
-    branches: [main]
+    branches: [main, test/llard-docker-image]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
