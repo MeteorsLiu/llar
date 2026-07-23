@@ -6,8 +6,21 @@ current LLAR Formula API, matrix behavior, build tools, and validation process.
 Do not derive package build flags or dependencies from the neutral syntax
 fragments in this guide.
 
+## Go Compatibility and Classfile Style
+
+XGo is a Go-compatible superset. Use ordinary Go declarations, expressions,
+statements, and control flow in a `.gox` file when they express the formula
+clearly.
+
+A formula is still an XGo classfile rather than a standalone Go program. Its
+top-level variables and functions become members of the generated class, and
+its embedded base class provides the formula API. For example, write
+`func helper() { ... }` without a receiver; do not declare the generated
+struct, receiver, or program entrypoint yourself.
+
 ## Contents
 
+- [Go compatibility and classfile style](#go-compatibility-and-classfile-style)
 - [Classfile model](#classfile-model)
 - [LLAR classfiles](#llar-classfiles)
 - [Imports and names](#imports-and-names)
@@ -85,16 +98,16 @@ available:
 import "strings"
 ```
 
-XGo conventionally exposes exported Go identifiers with a lowercase initial
-letter:
+Use the XGo spelling for every exported Go identifier: lowercase only its
+first letter. For example, write `os.readFile(path)`, not `os.ReadFile(path)`:
 
 ```gox
+os.readFile(path)        // calls os.ReadFile(path)
 strings.trimSpace(value) // calls strings.TrimSpace(value)
 object.run()             // calls object.Run()
 ```
 
-The original exported spelling may also work, but use lowercase XGo spelling
-consistently in formulas and follow current LLAR fixtures.
+Apply this rule consistently in formulas and follow current LLAR fixtures.
 
 ## Calls
 
