@@ -33,10 +33,10 @@ func (f *testFormula) MainEntry() {
 // the unexported app() helper it dispatches through.
 func TestGopt_ModuleF_Main(t *testing.T) {
 	f := &testFormula{}
-	Gopt_ModuleF_Main(f)
+	XGot_ModuleF_Main(f)
 
 	if !f.mainCalled {
-		t.Fatal("MainEntry was not invoked by Gopt_ModuleF_Main")
+		t.Fatal("MainEntry was not invoked by XGot_ModuleF_Main")
 	}
 	if f.modPath != "foo/bar" {
 		t.Errorf("Id: modPath = %q, want %q", f.modPath, "foo/bar")
