@@ -36,12 +36,12 @@ func init() {
 		AliasTypes: map[string]reflect.Type{},
 		Vars:       map[string]reflect.Value{},
 		Funcs: map[string]reflect.Value{
-			"Gopt_ModuleF_Main": reflect.ValueOf(q.Gopt_ModuleF_Main),
+			"XGot_ModuleF_Main": reflect.ValueOf(q.XGot_ModuleF_Main),
 			"NewContext":        reflect.ValueOf(q.NewContext),
 		},
 		TypedConsts: map[string]ixgo.TypedConst{},
 		UntypedConsts: map[string]ixgo.UntypedConst{
-			"GopPackage": {"untyped bool", constant.MakeBool(bool(q.GopPackage))},
+			"XGoPackage": {"untyped bool", constant.MakeBool(bool(q.XGoPackage))},
 		},
 	})
 }

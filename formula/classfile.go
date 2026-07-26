@@ -13,7 +13,9 @@ import (
 	"github.com/qiniu/x/gsh"
 )
 
-const GopPackage = true
+const (
+	XGoPackage = true
+)
 
 // -----------------------------------------------------------------------------
 
@@ -269,11 +271,13 @@ func (p *ModuleF) OnTest(f func(ctx *Context, proj *Project, out *TestResult)) {
 
 // -----------------------------------------------------------------------------
 
-// Gopt_ModuleF_Main is main entry of this classfile.
-func Gopt_ModuleF_Main(this interface {
+// XGot_ModuleF_Main is main entry of this classfile.
+func XGot_ModuleF_Main(this interface {
 	app() *gsh.App
 	MainEntry()
 }) {
 	this.MainEntry()
 	gsh.InitApp(this.app())
 }
+
+// -----------------------------------------------------------------------------
