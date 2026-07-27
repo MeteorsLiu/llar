@@ -17,6 +17,7 @@ func init() {
 		Path: "github.com/goplus/llar/formula",
 		Deps: map[string]string{
 			"github.com/goplus/llar/mod/module": "module",
+			"github.com/qiniu/x/errors":         "errors",
 			"github.com/qiniu/x/gsh":            "gsh",
 			"io/fs":                             "fs",
 			"maps":                              "maps",
