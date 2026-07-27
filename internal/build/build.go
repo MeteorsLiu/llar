@@ -53,6 +53,20 @@ type Options struct {
 	Cache        cache.Cache
 }
 
+func runFormulaHook(fn func()) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if panicErr, ok := recovered.(error); ok {
+				err = panicErr
+				return
+			}
+			err = fmt.Errorf("formula hook panic: %v", recovered)
+		}
+	}()
+	fn()
+	return nil
+}
+
 func defaultWorkspaceDir() (string, error) {
 	userCacheDir, err := os.UserCacheDir()
 	if err != nil {
@@ -301,7 +315,11 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			if cacheHit {
 				metadata = entry.Metadata
 			} else {
-				mod.OnBuild(buildContext)
+				if err := runFormulaHook(func() {
+					mod.OnBuild(buildContext)
+				}); err != nil {
+					return err
+				}
 				if len(buildContext.Errs) > 0 {
 					return errors.Join(buildContext.Errs...)
 				}
@@ -312,7 +330,11 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			// artifacts, reusing the same build context so tests see a
 			// consistent environment either way.
 			if testThisMod {
-				mod.OnTest(buildContext)
+				if err := runFormulaHook(func() {
+					mod.OnTest(buildContext)
+				}); err != nil {
+					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, err)
+				}
 				if len(buildContext.Errs) > 0 {
 					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, buildContext.Errs)
 				}

@@ -16,6 +16,7 @@ import (
 
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build/cache"
+	internalformula "github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -565,6 +566,69 @@ func TestBuild_EmptyTargets(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("got %d results, want 0", len(results))
+	}
+}
+
+func TestBuild_RecoversFormulaHookPanic(t *testing.T) {
+	wantErr := errors.New("hook failed")
+	tests := []struct {
+		name      string
+		runTest   bool
+		onBuild   func(*classfile.Context)
+		onTest    func(*classfile.Context)
+		wantError string
+		wantCause error
+	}{
+		{
+			name: "onBuild error panic",
+			onBuild: func(*classfile.Context) {
+				panic(wantErr)
+			},
+			wantError: wantErr.Error(),
+			wantCause: wantErr,
+		},
+		{
+			name: "onBuild non-error panic",
+			onBuild: func(*classfile.Context) {
+				panic("unexpected failure")
+			},
+			wantError: "formula hook panic: unexpected failure",
+		},
+		{
+			name:    "onTest error panic",
+			runTest: true,
+			onBuild: func(*classfile.Context) {},
+			onTest: func(*classfile.Context) {
+				panic(wantErr)
+			},
+			wantError: "onTest failed for test/liba@1.0.0: hook failed",
+			wantCause: wantErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := setupTestStore(t)
+			b := setupBuilder(t, store, "amd64-linux")
+			b.runTest = tt.runTest
+			root := &modules.Module{
+				Formula: &internalformula.Formula{
+					OnBuild: tt.onBuild,
+					OnTest:  tt.onTest,
+				},
+				FS:      os.DirFS(testFormulaDir),
+				Path:    "test/liba",
+				Version: "1.0.0",
+			}
+
+			_, err := b.Build(context.Background(), []*modules.Module{root})
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("Build error = %v, want error containing %q", err, tt.wantError)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Fatalf("Build error does not wrap hook error %v: %v", tt.wantCause, err)
+			}
+		})
 	}
 }
 

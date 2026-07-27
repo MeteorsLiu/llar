@@ -270,6 +270,20 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	return modules, nil
 }
 
+func runFormulaHook(fn func()) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if panicErr, ok := recovered.(error); ok {
+				err = panicErr
+				return
+			}
+			err = fmt.Errorf("formula hook panic: %v", recovered)
+		}
+	}()
+	fn()
+	return nil
+}
+
 // resolveDeps resolves the dependencies for a formula.
 // It first tries to get dependencies from the OnRequire callback,
 // then falls back to parsing versions.json if no dependencies are found.
@@ -281,8 +295,16 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula,
 	// XGo formulas read the selected matrix through target.require/options.
 	// Inject before filter and onRequire so both hooks see the same target.
 	injectMatrix(frla, matrix)
-	if frla.Filter != nil && !frla.Filter() {
-		return nil, fmt.Errorf("%s@%s does not support selected matrix", mod.Path, mod.Version)
+	if frla.Filter != nil {
+		var supported bool
+		if err := runFormulaHook(func() {
+			supported = frla.Filter()
+		}); err != nil {
+			return nil, fmt.Errorf("filter failed for %s@%s: %w", mod.Path, mod.Version, err)
+		}
+		if !supported {
+			return nil, fmt.Errorf("%s@%s does not support selected matrix", mod.Path, mod.Version)
+		}
 	}
 
 	var deps classfile.ModuleDeps
@@ -307,7 +329,11 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula,
 		proj := &classfile.Project{
 			SourceFS: repoFS.(fs.ReadFileFS),
 		}
-		frla.OnRequire(proj, &deps)
+		if err := runFormulaHook(func() {
+			frla.OnRequire(proj, &deps)
+		}); err != nil {
+			return nil, fmt.Errorf("onRequire failed for %s@%s: %w", mod.Path, mod.Version, err)
+		}
 	}
 
 	content, err := modFS.ReadFile("versions.json")

@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -103,6 +104,44 @@ func TestResolveDeps_NoOnRequire_NoDeps(t *testing.T) {
 	}
 	if len(deps) != 0 {
 		t.Errorf("expected 0 deps, got %d: %v", len(deps), deps)
+	}
+}
+
+func TestRunFormulaHookRecoversPanic(t *testing.T) {
+	wantErr := errors.New("hook failed")
+	tests := []struct {
+		name       string
+		panicValue any
+		wantError  string
+		wantCause  error
+	}{
+		{
+			name:       "error panic",
+			panicValue: wantErr,
+			wantError:  "hook failed",
+			wantCause:  wantErr,
+		},
+		{
+			name:       "non-error panic",
+			panicValue: "unexpected failure",
+			wantError:  "formula hook panic: unexpected failure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := func() {
+				panic(tt.panicValue)
+			}
+
+			err := runFormulaHook(fn)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("runFormulaHook error = %v, want error containing %q", err, tt.wantError)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Fatalf("runFormulaHook error does not wrap hook error %v: %v", tt.wantCause, err)
+			}
+		})
 	}
 }
 
