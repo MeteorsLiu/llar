@@ -6,6 +6,6 @@ onRequire (proj, deps) => {
     echo "checking deps for withreq"
 }
 
-onBuild (ctx, proj, out) => {
+onBuild ctx => {
     echo "building withreq"
 }

@@ -19,6 +19,6 @@ onRequire (proj, deps) => {
 	}
 }
 
-onBuild (ctx, proj, out) => {
+onBuild ctx => {
 	_ = target.options["debug"]
 }

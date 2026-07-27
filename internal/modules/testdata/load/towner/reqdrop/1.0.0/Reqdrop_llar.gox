@@ -6,6 +6,6 @@ onRequire (proj, deps) => {
     deps.require "towner/unknown", ""
 }
 
-onBuild (ctx, proj, out) => {
+onBuild ctx => {
     echo "building reqdrop"
 }

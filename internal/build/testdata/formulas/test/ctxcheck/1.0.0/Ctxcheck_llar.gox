@@ -2,6 +2,6 @@ id "test/ctxcheck"
 
 fromVer "1.0.0"
 
-onBuild (ctx, proj, out) => {
-	out.setMetadata "-lctxcheck"
+onBuild ctx => {
+	ctx.setMetadata "-lctxcheck"
 }

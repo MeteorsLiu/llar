@@ -2,7 +2,7 @@ id "test/liba"
 
 fromVer "1.0.0"
 
-onBuild (ctx, proj, out) => {
+onBuild ctx => {
 	println "verbose build output"
-	out.setMetadata "-lA"
+	ctx.setMetadata "-lA"
 }

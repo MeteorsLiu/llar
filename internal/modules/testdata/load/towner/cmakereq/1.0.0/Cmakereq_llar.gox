@@ -24,6 +24,6 @@ onRequire (proj, deps) => {
 	}
 }
 
-onBuild (ctx, proj, out) => {
+onBuild ctx => {
 	echo "building cmakereq"
 }

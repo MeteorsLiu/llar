@@ -6,7 +6,7 @@ onRequire (proj, deps) => {
    echo "hello zlib"
 }
 
-onBuild (ctx, proj, out) => {
+onBuild ctx => {
     echo "hello"
 
 }

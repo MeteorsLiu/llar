@@ -4,18 +4,11 @@ id "test/testhook"
 
 fromVer "1.0.0"
 
-onBuild (ctx, proj, out) => {
-	out.setMetadata "-lHOOK"
+onBuild ctx => {
+	ctx.setMetadata "-lHOOK"
 }
 
-onTest (ctx, proj, out) => {
-	installDir, err := ctx.outputDir()
-	if err != nil {
-		out.addErr err
-		return
-	}
-	err = os.writeFile(installDir+"/ontest.stamp", []byte("ran"), 0o644)
-	if err != nil {
-		out.addErr err
-	}
+onTest ctx => {
+	installDir := ctx.outputDir
+	os.writeFile(installDir+"/ontest.stamp", []byte("ran"), 0o644)!
 }

@@ -6,40 +6,20 @@ onRequire (proj, deps) => {
 	deps.require "madler/zlib", "v1.2.11"
 }
 
-onBuild (ctx, proj, out) => {
-	installDir, err := ctx.outputDir()
-	if err != nil {
-		out.addErr err
-		return
-	}
+onBuild ctx => {
+	installDir := ctx.outputDir
 
 	a := autotools.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
 
 	// Inject zlib dependency via autotools.use
-	for _, dep := range proj.Deps {
-		depDir, err := ctx.outputDir(dep)
-		if err != nil {
-			out.addErr err
-			return
-		}
+	for _, dep := range ctx.Proj.Deps {
+		depDir := ctx.outputDir(dep)
 		a.use depDir
 	}
 
-	err = a.configure()
-	if err != nil {
-		out.addErr err
-		return
-	}
-	err = a.build()
-	if err != nil {
-		out.addErr err
-		return
-	}
-	err = a.install()
-	if err != nil {
-		out.addErr err
-		return
-	}
+	a.configure
+	a.build
+	a.install
 
-	out.setMetadata "-lpng"
+	ctx.setMetadata "-lpng"
 }
