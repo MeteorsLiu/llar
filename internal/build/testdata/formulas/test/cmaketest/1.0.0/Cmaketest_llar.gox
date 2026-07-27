@@ -11,9 +11,9 @@ onBuild ctx => {
 	c.buildType "Release"
 	c.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
 
-	c.configure()!
-	c.build()!
-	c.install()!
+	c.configure
+	c.build
+	c.install
 
 	ctx.setMetadata "-lcmtadd"
 }
@@ -32,8 +32,8 @@ onTest ctx => {
 	tc.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
 	tc.use installDir
 
-	tc.configure()!
-	tc.build()!
+	tc.configure
+	tc.build
 
 	// Run the freshly-built test binary. A non-zero exit code surfaces
 	// via lastErr and fails onTest.

@@ -9,9 +9,9 @@ onBuild ctx => {
 	c.buildType "Release"
 	c.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
 
-	c.configure()!
-	c.build()!
-	c.install()!
+	c.configure
+	c.build
+	c.install
 
 	ctx.setMetadata "-lz"
 }

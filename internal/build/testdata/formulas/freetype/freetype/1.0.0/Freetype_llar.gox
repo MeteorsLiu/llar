@@ -90,9 +90,9 @@ onBuild ctx => {
 		c.use depDir
 	}
 
-	c.configure()!
-	c.build()!
-	c.install()!
+	c.configure
+	c.build
+	c.install
 
 	// Extract link metadata from pkg-config
 	c.use installDir

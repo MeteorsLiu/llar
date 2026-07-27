@@ -18,9 +18,9 @@ onBuild ctx => {
 		c.use depDir
 	}
 
-	c.configure()!
-	c.build()!
-	c.install()!
+	c.configure
+	c.build
+	c.install
 
 	ctx.setMetadata "-lzshim"
 }
