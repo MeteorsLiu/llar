@@ -174,15 +174,9 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 	c.DefineBool("ENABLE", true)
 	c.DefineBool("DISABLE", false)
 
-	if err := c.Configure(); err != nil {
-		t.Fatalf("Configure: %v", err)
-	}
-	if err := c.Build(); err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if err := c.Install(); err != nil {
-		t.Fatalf("Install: %v", err)
-	}
+	c.Configure()
+	c.Build()
+	c.Install()
 
 	for _, path := range []string{
 		filepath.Join(installDir, "lib", "libdummy.a"),
@@ -210,4 +204,18 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 			t.Errorf("cache missing %q", want)
 		}
 	}
+}
+
+func TestRunPanicsOnCommandError(t *testing.T) {
+	c := New("", "", "")
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("run did not panic")
+		}
+		if _, ok := recovered.(error); !ok {
+			t.Fatalf("panic value = %T, want error", recovered)
+		}
+	}()
+	c.run("llar-cmake-test-command-that-does-not-exist", nil)
 }

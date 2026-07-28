@@ -2,6 +2,6 @@ id "towner/standalone"
 
 fromVer "1.0.0"
 
-onBuild (ctx, proj, out) => {
+onBuild ctx => {
     echo "building standalone"
 }

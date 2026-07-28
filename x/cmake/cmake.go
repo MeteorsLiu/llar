@@ -107,9 +107,9 @@ func (c *CMake) Use(root string) {
 
 // Configure runs "cmake -S <source> -B <build>" with all configured options.
 // Extra args are appended at the end.
-func (c *CMake) Configure(args ...string) error {
+func (c *CMake) Configure(args ...string) {
 	if err := os.MkdirAll(c.buildDir, 0o755); err != nil {
-		return err
+		panic(err)
 	}
 	cmakeArgs := []string{"-S", c.sourceDir, "-B", c.buildDir}
 	if c.generator != "" {
@@ -126,27 +126,27 @@ func (c *CMake) Configure(args ...string) error {
 	}
 	cmakeArgs = append(cmakeArgs, c.definesArgs()...)
 	cmakeArgs = append(cmakeArgs, args...)
-	return c.run("cmake", cmakeArgs)
+	c.run("cmake", cmakeArgs)
 }
 
 // Build runs "cmake --build <build>" with optional extra arguments.
-func (c *CMake) Build(args ...string) error {
+func (c *CMake) Build(args ...string) {
 	cmakeArgs := []string{"--build", c.buildDir}
 	if c.buildType != "" {
 		cmakeArgs = append(cmakeArgs, "--config", c.buildType)
 	}
 	cmakeArgs = append(cmakeArgs, args...)
-	return c.run("cmake", cmakeArgs)
+	c.run("cmake", cmakeArgs)
 }
 
 // Install runs "cmake --install <build>" with optional extra arguments.
-func (c *CMake) Install(args ...string) error {
+func (c *CMake) Install(args ...string) {
 	cmakeArgs := []string{"--install", c.buildDir}
 	if c.installDir != "" {
 		cmakeArgs = append(cmakeArgs, "--prefix", c.installDir)
 	}
 	cmakeArgs = append(cmakeArgs, args...)
-	return c.run("cmake", cmakeArgs)
+	c.run("cmake", cmakeArgs)
 }
 
 // OutputDir returns installDir if set, otherwise buildDir.
@@ -157,7 +157,7 @@ func (c *CMake) OutputDir() string {
 	return c.buildDir
 }
 
-func (c *CMake) run(name string, args []string) error {
+func (c *CMake) run(name string, args []string) {
 	cmd := execbroker.Command(name, args...)
 	if cmd.Stdout == nil {
 		cmd.Stdout = os.Stdout
@@ -165,7 +165,10 @@ func (c *CMake) run(name string, args []string) error {
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (c *CMake) definesArgs() []string {

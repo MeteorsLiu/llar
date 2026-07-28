@@ -2,6 +2,6 @@ id "pnggroup/libpng"
 
 fromVer "v1.6.47"
 
-onBuild (ctx, proj, out) => {
-	out.setMetadata "-lpng"
+onBuild ctx => {
+	ctx.setMetadata "-lpng"
 }

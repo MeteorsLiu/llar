@@ -15,7 +15,8 @@ func init() {
 		Name: "semver",
 		Path: "golang.org/x/mod/semver",
 		Deps: map[string]string{
-			"sort": "sort",
+			"slices":  "slices",
+			"strings": "strings",
 		},
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{

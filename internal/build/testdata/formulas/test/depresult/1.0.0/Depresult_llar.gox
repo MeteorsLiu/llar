@@ -6,13 +6,13 @@ onRequire (proj, deps) => {
 	deps.require "test/liba", "1.0.0"
 }
 
-onBuild (ctx, proj, out) => {
-	if len(proj.Deps) > 0 {
-		result, ok := ctx.buildResult(proj.Deps[0])
+onBuild ctx => {
+	if len(ctx.Proj.Deps) > 0 {
+		result, ok := ctx.buildResult(ctx.Proj.Deps[0])
 		if ok {
-			out.setMetadata result.metadata() + " -lDR"
+			ctx.setMetadata result.metadata() + " -lDR"
 			return
 		}
 	}
-	out.setMetadata "-lDR_NO_DEP"
+	ctx.setMetadata "-lDR_NO_DEP"
 }

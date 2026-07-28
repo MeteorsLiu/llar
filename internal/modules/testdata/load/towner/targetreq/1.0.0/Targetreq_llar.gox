@@ -20,6 +20,6 @@ onRequire (proj, deps) => {
 	}
 }
 
-onBuild (ctx, proj, out) => {
-	out.setMetadata "-ltargetreq"
+onBuild ctx => {
+	ctx.setMetadata "-ltargetreq"
 }

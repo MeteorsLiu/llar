@@ -2,6 +2,6 @@ id "test/liba"
 
 fromVer "1.0.0"
 
-onBuild (ctx, proj, out) => {
-	out.setMetadata "-lA"
+onBuild ctx => {
+	ctx.setMetadata "-lA"
 }

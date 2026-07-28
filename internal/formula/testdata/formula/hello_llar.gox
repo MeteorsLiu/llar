@@ -6,10 +6,10 @@ onRequire (proj, deps) => {
    echo "hello"
 }
 
-onBuild (ctx, proj, out) => {
+onBuild ctx => {
     echo "hello"
 }
 
-onTest (ctx, proj, out) => {
+onTest ctx => {
     echo "test"
 }
