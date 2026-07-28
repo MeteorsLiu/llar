@@ -336,7 +336,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, err)
 				}
 				if len(buildContext.Errs) > 0 {
-					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, buildContext.Errs)
+					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, buildContext.Errs.ToError())
 				}
 			}
 			return nil
