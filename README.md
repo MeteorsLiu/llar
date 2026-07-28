@@ -1,6 +1,8 @@
+<!--
 <p align="center">
   <img width="250" height="250" alt="LLAR Logo" src=".github/logo.png" />
 </p>
+-->
 
 # LLAR
 
