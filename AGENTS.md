@@ -26,6 +26,11 @@
 - Tests for `llar make` should exercise the real Cobra command path where possible, then use fixtures and prepopulated cache to avoid network and source builds.
 - When tests touch package-level command flag variables, reset or restore those variables so one test cannot affect another.
 
+### XGo Classfile Skill
+
+- Before working on `.gox` files, `gox.mod`, class framework registration, generated class types or entrypoints, base-class contracts, `ClassKind`/`LookupClass`, or `Gopt`/`Gops`/`Gopx`/`Gopo` conventions, read and follow `.agents/skills/xgo-classfile/SKILL.md`.
+- Use the skill for changes that affect how XGo classfiles are parsed, registered, generated, or exposed from Go packages. Ordinary Go-only changes that do not cross the classfile boundary do not require it.
+
 ## Project Overview
 
 LLAR is a multi-language module manager built with XGo (gop) and xgo. It uses classfile mechanism for defining build formulas.
