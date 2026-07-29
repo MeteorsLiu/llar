@@ -560,6 +560,20 @@ func TestInstallReturnsLlardError(t *testing.T) {
 	}
 }
 
+func TestInstallReturnsMultipleLlardErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-cmdjsonl")
+		writeInstallCommand(t, w, "error", "build failed")
+		writeInstallCommand(t, w, "error", "test failed")
+	}))
+	defer server.Close()
+
+	_, err := install(context.Background(), nil, server.URL, "test/root@v1.0.0", hostMatrix())
+	if err == nil || err.Error() != "llard: build failed\nllard: test failed" {
+		t.Fatalf("install() error = %v, want joined llard errors", err)
+	}
+}
+
 func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
 	tests := []struct {
 		name        string

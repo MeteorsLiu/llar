@@ -3,6 +3,7 @@ package internal
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -221,16 +222,15 @@ func requestInstallArtifacts(ctx context.Context, progress io.Writer, client *ht
 	}
 
 	var artifacts []installArtifactMessage
-	var responseErr error
+	var responseErrs []error
 	var parser cmdjsonl.Parser
 	if err := parser.HandleFunc("info", func(message string) {
 		fmt.Fprintln(progress, message)
 	}); err != nil {
 		return nil, err
 	}
-	if err := parser.HandleFunc("error", func(message string) error {
-		responseErr = fmt.Errorf("llard: %s", message)
-		return responseErr
+	if err := parser.HandleFunc("error", func(message string) {
+		responseErrs = append(responseErrs, fmt.Errorf("llard: %s", message))
 	}); err != nil {
 		return nil, err
 	}
@@ -243,11 +243,12 @@ func requestInstallArtifacts(ctx context.Context, progress io.Writer, client *ht
 	}); err != nil {
 		return nil, err
 	}
-	if err := parser.Parse(resp.Body, bufio.MaxScanTokenSize); err != nil {
-		if responseErr != nil {
-			return nil, responseErr
-		}
-		return nil, err
+	parseErr := parser.Parse(resp.Body, bufio.MaxScanTokenSize)
+	if len(responseErrs) > 0 {
+		return nil, errors.Join(responseErrs...)
+	}
+	if parseErr != nil {
+		return nil, parseErr
 	}
 	if len(artifacts) == 0 {
 		return nil, fmt.Errorf("llard returned no artifacts")
