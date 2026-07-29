@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -569,6 +570,7 @@ func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
 	}{
 		{name: "status", status: http.StatusServiceUnavailable, contentType: "application/x-cmdjsonl", want: "llard returned 503 Service Unavailable"},
 		{name: "content type", contentType: "text/plain", body: "artifact {}\n", want: `llard returned content type "text/plain", want application/x-cmdjsonl`},
+		{name: "content type syntax", contentType: "application/x-cmdjsonl; invalid", body: "artifact {}\n", want: `llard returned content type "application/x-cmdjsonl; invalid", want application/x-cmdjsonl`},
 		{name: "line", contentType: "application/x-cmdjsonl", body: "invalid\n", want: "1: parse error when ParseCommand: no space found"},
 		{name: "info JSON", contentType: "application/x-cmdjsonl", body: "info {\n", want: "1: parse error when UnmarshalParam: unexpected end of JSON input"},
 		{name: "error JSON", contentType: "application/x-cmdjsonl", body: "error {\n", want: "1: parse error when UnmarshalParam: unexpected end of JSON input"},
@@ -601,6 +603,44 @@ func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
 				t.Fatalf("requestInstallArtifacts() error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestRequestInstallArtifactsReturnsTransportError(t *testing.T) {
+	baseURL, err := url.Parse("https://llard.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection reset")
+	})}
+
+	_, err = requestInstallArtifacts(
+		context.Background(), nil, client, baseURL,
+		module.Version{Path: "test/root"}, url.Values{"os": {"linux"}},
+	)
+	if err == nil || !strings.Contains(err.Error(), "connection reset") {
+		t.Fatalf("requestInstallArtifacts() error = %v, want transport error", err)
+	}
+}
+
+func TestRequestInstallArtifactsRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-cmdjsonl")
+		_, _ = io.WriteString(w, strings.Repeat("x", bufio.MaxScanTokenSize+1)+"\n")
+	}))
+	defer server.Close()
+
+	baseURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = requestInstallArtifacts(
+		context.Background(), nil, server.Client(), baseURL,
+		module.Version{Path: "test/root"}, url.Values{"os": {"linux"}},
+	)
+	if err == nil || err.Error() != "1: parse error when ReadLine: line too long" {
+		t.Fatalf("requestInstallArtifacts() error = %v, want oversized line error", err)
 	}
 }
 
