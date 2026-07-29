@@ -16,7 +16,7 @@ import (
 	"github.com/goplus/ixgo/xgobuild"
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/execbroker"
-	llarixgo "github.com/goplus/llar/internal/ixgo"
+	_ "github.com/goplus/llar/internal/ixgo"
 )
 
 // formulaProgram is the native GC owner for one interpreted formula program.
@@ -80,9 +80,6 @@ type Formula struct {
 // The struct name is derived from the filename prefix before "_" (e.g., "hello" from "hello_llar.gox").
 // Calling Main() triggers Gopt_ModuleF_Main which invokes MainEntry() to populate the struct fields.
 func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
-	llarixgo.LockInterp()
-	defer llarixgo.UnlockInterp()
-
 	// Formula types remain cached after loading, so later interpreters must not
 	// reset the dynamic method slots used by earlier types.
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
@@ -115,7 +112,7 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		return nil, err
 	}
 	program := &formulaProgram{}
-	runtime.AddCleanup(program, llarixgo.ReleaseInterp, interp)
+	runtime.AddCleanup(program, (*ixgo.Interp).UnsafeRelease, interp)
 
 	// Run package-level init functions
 	if err = interp.RunInit(); err != nil {
@@ -166,9 +163,6 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 // Clone creates an independent class instance backed by the same compiled
 // formula program. Main must run again so its hooks capture the new instance.
 func Clone(f *Formula) *Formula {
-	llarixgo.LockInterp()
-	defer llarixgo.UnlockInterp()
-
 	val := reflect.New(f.program.typ)
 	class := val.Elem()
 	val.Interface().(interface{ Main() }).Main()

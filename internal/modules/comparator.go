@@ -11,7 +11,7 @@ import (
 
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
-	llarixgo "github.com/goplus/llar/internal/ixgo"
+	_ "github.com/goplus/llar/internal/ixgo"
 	"github.com/goplus/llar/mod/module"
 )
 
@@ -27,9 +27,6 @@ type comparatorProgram struct {
 //   - zero if v1 == v2
 //   - a positive value if v1 > v2
 func loadComparatorFS(fs fs.ReadFileFS, path string) (comparator func(v1, v2 module.Version) int, err error) {
-	llarixgo.LockInterp()
-	defer llarixgo.UnlockInterp()
-
 	// Loading a comparator must not reset method slots owned by cached formulas.
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
 
@@ -51,7 +48,7 @@ func loadComparatorFS(fs fs.ReadFileFS, path string) (comparator func(v1, v2 mod
 		return nil, err
 	}
 	program := &comparatorProgram{}
-	runtime.AddCleanup(program, llarixgo.ReleaseInterp, interp)
+	runtime.AddCleanup(program, (*ixgo.Interp).UnsafeRelease, interp)
 	if err = interp.RunInit(); err != nil {
 		return nil, err
 	}
