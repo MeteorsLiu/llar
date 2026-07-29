@@ -15,7 +15,6 @@ import (
 	"github.com/goplus/ixgo"
 	formulapkg "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/execbroker"
-	llarixgo "github.com/goplus/llar/internal/ixgo"
 )
 
 func TestLoadFS(t *testing.T) {
@@ -137,9 +136,7 @@ func TestFormulaProgramCleanup(t *testing.T) {
 	runtime.GC()
 	time.Sleep(10 * time.Millisecond)
 
-	llarixgo.LockInterp()
 	_, before, _ := ixgo.IcallStat()
-	llarixgo.UnlockInterp()
 
 	var loaded int
 	var onBuild func(*formulapkg.Context)
@@ -153,9 +150,7 @@ func TestFormulaProgramCleanup(t *testing.T) {
 			_ = Clone(f)
 		}
 
-		llarixgo.LockInterp()
 		_, loaded, _ = ixgo.IcallStat()
-		llarixgo.UnlockInterp()
 		onBuild = f.OnBuild
 	}()
 	if loaded <= before {
@@ -163,9 +158,7 @@ func TestFormulaProgramCleanup(t *testing.T) {
 	}
 	runtime.GC()
 	time.Sleep(10 * time.Millisecond)
-	llarixgo.LockInterp()
 	_, withHook, _ := ixgo.IcallStat()
-	llarixgo.UnlockInterp()
 	if withHook <= before {
 		t.Fatal("formula program was released while OnBuild remained reachable")
 	}
@@ -177,9 +170,7 @@ func TestFormulaProgramCleanup(t *testing.T) {
 		runtime.GC()
 		time.Sleep(10 * time.Millisecond)
 
-		llarixgo.LockInterp()
 		_, allocated, _ := ixgo.IcallStat()
-		llarixgo.UnlockInterp()
 		if allocated <= before {
 			return
 		}

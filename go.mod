@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/google/go-containerregistry v0.20.7
-	github.com/goplus/ixgo v1.1.1
+	github.com/goplus/ixgo v1.1.2-0.20260728090628-e6b365701d30
 	github.com/goplus/mod v0.21.1
 	github.com/goplus/xgo v1.7.5
 	github.com/jessevdk/go-flags v1.6.1
@@ -29,7 +29,7 @@ require (
 	github.com/gammazero/toposort v0.1.1 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/goplus/gogen v1.23.5 // indirect
-	github.com/goplus/reflectx v1.7.2 // indirect
+	github.com/goplus/reflectx v1.7.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
