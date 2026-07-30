@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -559,6 +560,20 @@ func TestInstallReturnsLlardError(t *testing.T) {
 	}
 }
 
+func TestInstallReturnsMultipleLlardErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-cmdjsonl")
+		writeInstallCommand(t, w, "error", "build failed")
+		writeInstallCommand(t, w, "error", "test failed")
+	}))
+	defer server.Close()
+
+	_, err := install(context.Background(), nil, server.URL, "test/root@v1.0.0", hostMatrix())
+	if err == nil || err.Error() != "llard: build failed\nllard: test failed" {
+		t.Fatalf("install() error = %v, want joined llard errors", err)
+	}
+}
+
 func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -569,12 +584,13 @@ func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
 	}{
 		{name: "status", status: http.StatusServiceUnavailable, contentType: "application/x-cmdjsonl", want: "llard returned 503 Service Unavailable"},
 		{name: "content type", contentType: "text/plain", body: "artifact {}\n", want: `llard returned content type "text/plain", want application/x-cmdjsonl`},
-		{name: "line", contentType: "application/x-cmdjsonl", body: "invalid\n", want: "invalid llard response line 1"},
-		{name: "info JSON", contentType: "application/x-cmdjsonl", body: "info {\n", want: "decode llard info line 1"},
-		{name: "error JSON", contentType: "application/x-cmdjsonl", body: "error {\n", want: "decode llard error line 1"},
-		{name: "artifact JSON", contentType: "application/x-cmdjsonl", body: "artifact {\n", want: "decode llard artifact line 1"},
-		{name: "artifact fields", contentType: "application/x-cmdjsonl", body: "artifact {\"id\":\"test/root@v1?os=linux\"}\n", want: "invalid llard artifact line 1"},
-		{name: "command", contentType: "application/x-cmdjsonl", body: "done {}\n", want: `unsupported llard response command "done"`},
+		{name: "content type syntax", contentType: "application/x-cmdjsonl; invalid", body: "artifact {}\n", want: `llard returned content type "application/x-cmdjsonl; invalid", want application/x-cmdjsonl`},
+		{name: "line", contentType: "application/x-cmdjsonl", body: "invalid\n", want: "1: parse error when ParseCommand: no space found"},
+		{name: "info JSON", contentType: "application/x-cmdjsonl", body: "info {\n", want: "1: parse error when UnmarshalParam: unexpected end of JSON input"},
+		{name: "error JSON", contentType: "application/x-cmdjsonl", body: "error {\n", want: "1: parse error when UnmarshalParam: unexpected end of JSON input"},
+		{name: "artifact JSON", contentType: "application/x-cmdjsonl", body: "artifact {\n", want: "1: parse error when UnmarshalParam: unexpected end of JSON input"},
+		{name: "artifact fields", contentType: "application/x-cmdjsonl", body: "artifact {\"id\":\"test/root@v1?os=linux\"}\n", want: "1: parse error when CallHandler artifact: invalid llard artifact"},
+		{name: "command", contentType: "application/x-cmdjsonl", body: "done {}\n", want: "1: parse error when ParseCommand: unknown command 'done'"},
 		{name: "no artifacts", contentType: "application/x-cmdjsonl", body: "info \"checking\"\n", want: "llard returned no artifacts"},
 	}
 	for _, tt := range tests {
@@ -601,6 +617,44 @@ func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
 				t.Fatalf("requestInstallArtifacts() error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestRequestInstallArtifactsReturnsTransportError(t *testing.T) {
+	baseURL, err := url.Parse("https://llard.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection reset")
+	})}
+
+	_, err = requestInstallArtifacts(
+		context.Background(), nil, client, baseURL,
+		module.Version{Path: "test/root"}, url.Values{"os": {"linux"}},
+	)
+	if err == nil || !strings.Contains(err.Error(), "connection reset") {
+		t.Fatalf("requestInstallArtifacts() error = %v, want transport error", err)
+	}
+}
+
+func TestRequestInstallArtifactsRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-cmdjsonl")
+		_, _ = io.WriteString(w, strings.Repeat("x", bufio.MaxScanTokenSize+1)+"\n")
+	}))
+	defer server.Close()
+
+	baseURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = requestInstallArtifacts(
+		context.Background(), nil, server.Client(), baseURL,
+		module.Version{Path: "test/root"}, url.Values{"os": {"linux"}},
+	)
+	if err == nil || err.Error() != "1: parse error when ReadLine: line too long" {
+		t.Fatalf("requestInstallArtifacts() error = %v, want oversized line error", err)
 	}
 }
 
