@@ -1,0 +1,179 @@
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+)
+
+// copyTree recursively copies the directory tree at src into dst, preserving
+// the relative layout. It panics on any filesystem error.
+func copyTree(src, dst string) {
+	entries := os.readDir(src)!
+	if err := os.mkdirAll(dst, 0o755); err != nil {
+		panic err
+	}
+	for _, entry := range entries {
+		s := filepath.join(src, entry.name())
+		d := filepath.join(dst, entry.name())
+		if entry.isDir() {
+			copyTree(s, d)
+			continue
+		}
+		data := os.readFile(s)!
+		if err := os.writeFile(d, data, 0o644); err != nil {
+			panic err
+		}
+	}
+}
+
+// hasLibrary reports whether a cglm library artifact was installed under
+// <installDir>/lib. A header-only install has no such file.
+func hasLibrary(installDir string) bool {
+	libDir := filepath.join(installDir, "lib")
+	entries, err := os.readDir(libDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if strings.contains(entry.name(), "cglm") {
+			return true
+		}
+	}
+	return false
+}
+
+const consumerProgram = `#include <cglm/cglm.h>
+#include <stdio.h>
+
+int main(void) {
+	mat4 matrix = {
+		{1.0f, 0.0f, 0.0f, 0.0f},
+		{0.0f, 1.0f, 0.0f, 0.0f},
+		{0.0f, 0.0f, 1.0f, 0.0f},
+		{0.0f, 0.0f, 0.0f, 1.0f},
+	};
+	vec4 vector = {1.0f, 2.0f, 3.0f, 1.0f};
+	vec4 result;
+
+	float det = glm_mat4_det(matrix);
+	glm_mat4_mulv(matrix, vector, result);
+
+	printf("det=%f\n", det);
+	printf("result=%f %f %f %f\n",
+		result[0], result[1], result[2], result[3]);
+	return 0;
+}
+`
+
+id "recp/cglm"
+
+fromVer "v0.8.5"
+
+// cglm is an optimized C99 math library. Its CMake build produces a single
+// `cglm` library from `src/`, installs public headers under `include/cglm`,
+// and generates a `cglm.pc` pkg-config file. Upstream also supports a
+// header-only mode where consumers use only the installed headers.
+//
+// Options mirror the meaningful choices of the Conan Center recipe:
+//   - shared: build the shared library (ON) instead of the static one (OFF).
+//   - header_only: install headers only and build nothing.
+// The upstream CMake option CGLM_USE_TEST is always disabled; it builds the
+// upstream test suite, not the installed interface.
+defaults {
+	"shared":      "OFF",
+	"header_only": "OFF",
+}
+
+filter => {
+	for _, value := range target.options["shared"] {
+		if value != "ON" && value != "OFF" {
+			return false
+		}
+	}
+	for _, value := range target.options["header_only"] {
+		if value != "ON" && value != "OFF" {
+			return false
+		}
+	}
+	// A header-only package installs no library, so a shared/static choice is
+	// meaningless. Reject the combination rather than silently ignoring it.
+	if slices.contains(target.options["header_only"], "ON") &&
+		slices.contains(target.options["shared"], "ON") {
+		return false
+	}
+	return true
+}
+
+onBuild ctx => {
+	installDir := ctx.outputDir
+	headerOnly := slices.contains(target.options["header_only"], "ON")
+
+	if headerOnly {
+		// Header-only: install the public headers exactly as they ship under
+		// include/cglm, matching the Conan recipe's header_only packaging.
+		src := filepath.join(ctx.SourceDir, "include", "cglm")
+		dst := filepath.join(installDir, "include", "cglm")
+		copyTree(src, dst)
+		ctx.setMetadata "-I" + filepath.join(installDir, "include")
+		return
+	}
+
+	shared := slices.contains(target.options["shared"], "ON")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.defineBool "CGLM_SHARED", shared
+	c.defineBool "CGLM_STATIC", !shared
+	c.defineBool "CGLM_USE_TEST", false
+	c.configure
+	c.build
+	c.install
+
+	// Derive consumer flags from the installed pkg-config file so metadata
+	// stays synchronized with the actual build (e.g. -lm on Linux/FreeBSD).
+	c.use installDir
+	capout => {
+		exec "pkg-config", "--cflags", "--libs", "cglm"
+	}
+	if lastErr != nil {
+		panic lastErr
+	}
+	ctx.setMetadata strings.trimSpace(output)
+}
+
+onTest ctx => {
+	installDir := ctx.outputDir
+	testBuild := ctx.SourceDir + "/_consumer_build"
+	if err := os.mkdirAll(testBuild, 0o755); err != nil {
+		panic err
+	}
+
+	// Consumer program mirrors the Conan test_package: include <cglm/cglm.h>,
+	// compute a determinant and a matrix-vector product.
+	testSource := filepath.join(testBuild, "consumer.c")
+	if err := os.writeFile(testSource, []byte(consumerProgram), 0o644); err != nil {
+		panic err
+	}
+
+	// Derive consumer flags from the installed output, not from ctx.Out
+	// metadata: on a cache hit onBuild is skipped and the build result is
+	// empty, but the install directory is still populated. Always add the
+	// header path; add link flags only when a library was installed (a
+	// header-only install has just headers).
+	flags := []string{"-I" + filepath.join(installDir, "include")}
+	if hasLibrary(installDir) {
+		flags = append(flags, "-L"+filepath.join(installDir, "lib"), "-lcglm", "-lm")
+	}
+
+	binary := filepath.join(testBuild, "consumer")
+	args := []string{testSource, "-o", binary}
+	args = append(args, flags...)
+	exec "cc", args...
+	if lastErr != nil {
+		panic lastErr
+	}
+
+	exec binary
+	if lastErr != nil {
+		panic lastErr
+	}
+}
