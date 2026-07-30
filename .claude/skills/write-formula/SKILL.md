@@ -33,9 +33,11 @@ an old Formula or wiki example.
 3. Inspect the module's current `versions.json`, every Formula threshold, and
    its optional comparator. Determine which Formula must change or whether a
    new `fromVer` boundary is required.
-4. Model direct dependencies. Use `onRequire` for source-derived or
-   matrix-dependent dependencies and `versions.json` for exact-version pins
-   and empty-version fallback.
+4. Model direct dependencies for the whole Formula range. Prefer `onRequire`
+   to read the requested tag's upstream dependency declarations so dependency
+   changes inside the range do not require repeated Formula edits. Use
+   `versions.json` only as a conservative, range-compatible fallback; it does
+   not need to be the newest dependency version.
 5. Model only build choices that affect dependency resolution, commands,
    installed output, metadata, tests, or support. Put environment dimensions
    under `target.require` and package-owned choices under `target.options`.
@@ -45,8 +47,10 @@ an old Formula or wiki example.
 7. Set metadata from the installed consumer interface. Add `onTest` when a
    small consumer can compile, link, load, or run solely from the source tree,
    installed output, and declared dependencies.
-8. Run `llar test` for the exact version, defaults, and every affected matrix
-   selection. Exercise both a fresh build and a cache hit when `onTest` exists.
+8. Run `llar test` at the affected `fromVer` boundary and representative exact
+   versions across the served range, especially versions whose upstream
+   dependencies differ. Test defaults and every affected matrix selection.
+   Exercise both a fresh build and a cache hit when `onTest` exists.
 
 ## Hard Rules
 
@@ -57,6 +61,15 @@ an old Formula or wiki example.
 - Put imports and helper declarations before the first top-level Formula call.
 - Declare direct dependencies only. Do not copy dependency names or versions
   from another package.
+- Prefer source-synchronized `onRequire` over hardcoded dependency versions.
+  Do not add a new Formula merely because an upstream dependency version
+  changed when the existing Formula can read that change from the requested
+  tag.
+- Keep `versions.json` fallback dependencies conservative: choose versions
+  verified to work throughout the Formula's served range, not automatically
+  the newest available versions. The current loader indexes fallbacks by exact
+  requested source version, so record the fallback under every exact version
+  that may need it.
 - Use `onBuild ctx => { ... }` and `onTest ctx => { ... }`.
 - Use `target.require` for propagated environment requirements and
   `target.options` for package-owned choices. Keep options independent.
@@ -105,7 +118,9 @@ llar test -v ./owner/repo@exact-source-tag \
   --option feature=value
 ```
 
-Confirm Formula selection, direct dependency versions, installed files,
-consumer metadata, defaults, supported options, `filter` rejection, command
-failure propagation, and cache-hit `onTest` behavior. Do not accept parsing or
-build success alone as proof that the installed package is usable.
+Repeat the command for representative versions across the affected Formula
+range. Confirm Formula selection, source-synchronized direct dependencies,
+fallback behavior, installed files, consumer metadata, defaults, supported
+options, `filter` rejection, command failure propagation, and cache-hit
+`onTest` behavior. Do not accept parsing or build success alone as proof that
+the installed package is usable.

@@ -46,7 +46,10 @@ dependencies:
   "path": "example/libalpha",
   "deps": {
     "v1.2.3": [
-      {"path": "example/libbeta", "version": "v2.3.4"}
+      {"path": "example/libbeta", "version": "v2.0.0"}
+    ],
+    "v1.4.0": [
+      {"path": "example/libbeta", "version": "v2.0.0"}
     ]
   }
 }
@@ -56,8 +59,9 @@ Apply these layout rules:
 
 - Make `versions.json.path` and Formula `id` equal the module directory path.
 - Key `deps` by the exact requested source tag, preserving prefixes and case.
-- Store direct dependencies only. Use an empty object when no versions need a
-  dependency fallback.
+- Store direct dependencies only. Treat each entry as a conservative fallback,
+  not as the newest dependency snapshot. Use an empty object when no versions
+  need fallback.
 - End Formula names in `_llar.gox` and comparator names in `_cmp.gox`.
 - Use a valid Go identifier before the first underscore in either filename and
   do not put another underscore in that stem. LLAR extracts the generated class
@@ -69,6 +73,21 @@ For a requested version, LLAR compares every literal `fromVer`, discards values
 newer than the request, and selects the greatest remaining value. A request
 older than every `fromVer` has no Formula. The optional module comparator is
 used for both Formula selection and module version resolution.
+
+`fromVer` lets one Formula describe a range of upstream versions. Dependencies
+can change inside that range even when the build recipe remains valid. Pair the
+range with `onRequire`: run the same Formula against each requested exact tag,
+read that tag's dependency declarations, and return its current direct
+dependencies. This keeps dependency data synchronized without adding a new
+Formula for every dependency release.
+
+Use `versions.json` as the fallback for that dynamic discovery. Choose a
+conservative dependency version verified to work throughout the Formula's
+served range; the fallback may intentionally be older than the dependency
+declared by newer upstream tags. The current loader still looks up the table by
+the exact requested source version, so place that fallback under every exact
+version that may need it. `fromVer` does not make `versions.json` a range-keyed
+table.
 
 `fromVer` must be a non-empty string literal. LLAR's selector parses the source
 AST without executing the Formula; a computed value cannot be selected.
@@ -159,7 +178,7 @@ cache miss has no build callback to execute.
 | `fromVer "version"` | `(*ModuleF).FromVer(string)` | Set the first source version served by this Formula. |
 | `defaults {"key": "value"}` | `(*ModuleF).Defaults(map[string]string)` | Set default option selections. |
 | `filter => { ... }` | `(*ModuleF).Filter(func() bool)` | Accept or reject the effective matrix. |
-| `onRequire (proj, deps) => { ... }` | `(*ModuleF).OnRequire(func(*Project, *ModuleDeps))` | Discover direct dependencies. |
+| `onRequire (proj, deps) => { ... }` | `(*ModuleF).OnRequire(func(*Project, *ModuleDeps))` | Synchronize direct dependencies from the requested upstream tag. |
 | `onBuild ctx => { ... }` | `(*ModuleF).OnBuild(func(*Context))` | Build and install on a cache miss. |
 | `onTest ctx => { ... }` | `(*ModuleF).OnTest(func(*Context))` | Verify the requested root's installed output. |
 
@@ -251,9 +270,10 @@ if err == nil {
 }
 ```
 
-Do not silently return from a required read and thereby select an unrelated
-`versions.json` fallback. Prove that fallback is correct for the exact source
-version before accepting the error.
+In `onRequire`, a failed or unrecognized dependency-manifest read may return
+without dependencies only when the corresponding `versions.json` entry is a
+verified fallback for that Formula range. Otherwise fail the hook instead of
+silently selecting an unrelated dependency.
 
 Current CMake and Autotools `configure`, `build`, and `install` methods return
 no value and panic on directory or command failure:
@@ -269,29 +289,41 @@ manual error blocks.
 
 ## Dependencies
 
+One Formula normally serves the interval beginning at its `fromVer` and ending
+before the next Formula threshold. The build recipe can remain stable while
+dependency names or versions change inside that interval. Use `onRequire` as
+the primary synchronization mechanism: LLAR gives it the selected exact tag's
+upstream filesystem, so it can read the same dependency manifest that upstream
+maintains.
+
 Declare only dependencies that the selected upstream configuration consumes
 directly. Translate every upstream build-system name to its LLAR module id;
 LLAR does not infer that mapping.
 
-Static dependency:
+Preferred source-synchronized dependency:
 
 ```gox
 onRequire (proj, deps) => {
-    deps.require "example/libbeta", "v2.3.4"
-}
-```
+    data, err := proj.readFile("dependency-version.txt")
+    if err != nil {
+        return
+    }
 
-Source-derived dependency:
-
-```gox
-onRequire (proj, deps) => {
-    data := proj.readFile("dependencies.lock")!
-    version := parseDependencyVersion(data)
+    version := strings.trimSpace(string(data))
     if version != "" {
         deps.require "example/libbeta", version
     }
 }
 ```
+
+Read a build manifest, lock file, vendored-subproject declaration, or other
+authoritative upstream source. Map only enabled direct dependencies. Do not
+hardcode the dependency version in `onRequire` when upstream already records
+it in a machine-readable form.
+
+`versions.json` is the fallback path. Its version should be known compatible
+with the Formula range and may deliberately lag the newest upstream dependency.
+Returning no usable dependency from `onRequire` activates that fallback.
 
 LLAR always parses `versions.json` and reconciles dependencies for the exact
 requested module version:
@@ -306,9 +338,10 @@ requested module version:
 5. If all `onRequire` dependencies are dropped, LLAR falls back to the complete
    non-empty static entry for that requested version.
 
-Keep `versions.json` synchronized with every exact source version that relies
-on fallback. An entry under a Formula threshold is not a range; dependency
-fallback keys are exact requested versions.
+Record the conservative fallback under every exact source version that may
+rely on it. The same range-compatible dependency version may appear under
+multiple source-version keys. An entry under a Formula threshold is not a
+range; current dependency fallback keys are exact requested versions.
 
 During build, expose installed dependencies to the build system:
 
@@ -735,11 +768,18 @@ replaced with evidence from the selected source.
   "path": "example/libalpha",
   "deps": {
     "v1.2.3": [
-      {"path": "example/libbeta", "version": "v2.3.4"}
+      {"path": "example/libbeta", "version": "v2.0.0"}
+    ],
+    "v1.4.0": [
+      {"path": "example/libbeta", "version": "v2.0.0"}
     ]
   }
 }
 ```
+
+Both source tags use the same conservative `v2.0.0` fallback. When either
+tag's `dependency-version.txt` declares a newer compatible dependency,
+`onRequire` returns that upstream version instead.
 
 `Libalpha_llar.gox`:
 
@@ -767,7 +807,14 @@ filter => {
 }
 
 onRequire (proj, deps) => {
-    deps.require "example/libbeta", "v2.3.4"
+    data, err := proj.readFile("dependency-version.txt")
+    if err != nil {
+        return
+    }
+    version := strings.trimSpace(string(data))
+    if version != "" {
+        deps.require "example/libbeta", version
+    }
 }
 
 onBuild ctx => {
@@ -821,10 +868,15 @@ onTest ctx => {
       select the intended source ranges under the active comparator.
 - [ ] Imports and helper declarations precede the first Formula statement.
 - [ ] Hook signatures use the current one-context build/test API.
-- [ ] `onRequire` declares direct dependencies only and maps upstream names to
-      verified LLAR module ids.
-- [ ] Empty dependency versions have an exact `versions.json` pin or are
-      intentionally absent.
+- [ ] `onRequire` reads the requested tag's authoritative dependency data,
+      declares direct dependencies only, and maps upstream names to verified
+      LLAR module ids.
+- [ ] Representative versions across each affected Formula range produce the
+      dependency names and versions declared by those upstream tags.
+- [ ] `versions.json` uses a conservative fallback verified across the Formula
+      range and records it under every exact source version that may need it.
+- [ ] Empty dependency versions have an exact fallback pin or are intentionally
+      absent.
 - [ ] Required and option keys have the correct ownership, defaults are
       supported, and options remain independent.
 - [ ] `filter` rejects only combinations proved unsupported.
