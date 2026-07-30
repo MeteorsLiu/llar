@@ -1,245 +1,224 @@
-# XGo Classfile Guide
+# XGo Classfiles For Formula Authors
 
-Use this guide for XGo and classfile syntax. Use the parent `SKILL.md` for the
-current LLAR Formula API, matrix behavior, build tools, and validation process.
+Use this reference only for XGo syntax and the classfile transformation. Use
+the parent `SKILL.md` for the current LLAR Formula API and use the target
+package's source for build behavior.
 
-Do not derive package build flags or dependencies from the neutral syntax
-fragments in this guide.
-
-## Go Compatibility and Classfile Style
-
-XGo is a Go-compatible superset. Use ordinary Go declarations, expressions,
-statements, and control flow in a `.gox` file when they express the formula
-clearly.
-
-A formula is still an XGo classfile rather than a standalone Go program. Its
-top-level variables and functions become members of the generated class, and
-its embedded base class provides the formula API. For example, write
-`func helper() { ... }` without a receiver; do not declare the generated
-struct, receiver, or program entrypoint yourself.
+When the `xgo-classfile` skill is available, prefer its complete and
+version-aware instructions over this focused reference.
 
 ## Contents
 
-- [Go compatibility and classfile style](#go-compatibility-and-classfile-style)
-- [Classfile model](#classfile-model)
-- [LLAR classfiles](#llar-classfiles)
-- [Imports and names](#imports-and-names)
+- [Sources](#sources)
+- [Go compatibility](#go-compatibility)
+- [LLAR class relationship](#llar-class-relationship)
+- [Filename rules](#filename-rules)
+- [File structure](#file-structure)
+- [Fields](#fields)
 - [Calls](#calls)
 - [Lambdas](#lambdas)
-- [Auto-properties and overloads](#auto-properties-and-overloads)
-- [Class members](#class-members)
-- [Literals and loops](#literals-and-loops)
-- [Strings and echo](#strings-and-echo)
 - [Error operators](#error-operators)
-- [Generation consequences](#generation-consequences)
-- [Checklist](#checklist)
+- [Literals, loops, and imports](#literals-loops-and-imports)
+- [Debugging checklist](#debugging-checklist)
 
-## Classfile Model
+## Sources
 
-An XGo classfile defines a class through a file rather than an explicit type
-declaration. Top-level variables become fields, and top-level functions become
-methods on the generated class.
+Treat XGo as a Go-compatible syntactic superset. Start with ordinary Go syntax
+and use XGo conveniences deliberately:
 
-Conceptually, a neutral classfile:
+- [XGo language guide](https://github.com/goplus/xgo/blob/main/doc/docs.md)
+- [XGo classfile guide](https://github.com/goplus/xgo/blob/main/doc/classfile.md)
+
+When generated behavior matters, use the XGo, gogen, and goplus/mod versions
+selected by the LLAR revision. Inspect XGo's `cl/classfile.go`, `cl/compile.go`,
+and `cl/expr.go` and the embedding registration in LLAR instead of assuming a
+different compiler version behaves identically.
+
+## Go Compatibility
+
+Ordinary Go declarations, expressions, statements, control flow, imports,
+parenthesized calls, composite literals, and exported identifier spellings are
+valid XGo. XGo sugar adds alternatives; it does not replace the Go forms.
+
+XGo also resolves an exported Go identifier through a lowercase-first-letter
+alias:
 
 ```gox
-var count int
+os.readFile(path)        // os.ReadFile(path)
+strings.trimSpace(text)  // strings.TrimSpace(text)
+builder.build()          // builder.Build()
+```
 
-func increment() {
-	count++
+Only the first ASCII letter changes. The original exported spelling remains
+valid. The alias does not expose arbitrary unexported names.
+
+Use the lowercase alias consistently with the surrounding LLAR formulas, but
+do not confuse it with a separate method in the Go API.
+
+## LLAR Class Relationship
+
+LLAR registers two XGo project classes through its ixgo build host:
+
+| Suffix | Embedded Go base | Automatic imports |
+| --- | --- | --- |
+| `_llar.gox` | `formula.ModuleF` | `autotools`, `cmake` |
+| `_cmp.gox` | `cmp.CmpApp` | `semver`, `gnu` |
+
+The generated type anonymously embeds the registered base. Go promotion makes
+the base's exported methods available as unqualified classfile DSL calls.
+There is no separate inheritance runtime.
+
+For a current `Zlib_llar.gox`:
+
+```gox
+id "madler/zlib"
+fromVer "1.0.0"
+
+onBuild ctx => {
+	ctx.setMetadata "-lz"
 }
 ```
 
-corresponds to a generated Go class shaped like:
+the essential generated Go shape is:
 
 ```go
-type Generated struct {
-	count int
+package main
+
+type Zlib struct {
+	formula.ModuleF
 }
 
-func (this *Generated) increment() {
-	this.count++
+func (this *Zlib) MainEntry() {
+	this.Id("madler/zlib")
+	this.FromVer("1.0.0")
+	this.OnBuild(func(ctx *formula.Context) {
+		ctx.SetMetadata("-lz")
+	})
+}
+
+func (this *Zlib) Main() {
+	formula.XGot_ModuleF_Main(this)
+}
+
+func main() {
+	new(Zlib).Main()
 }
 ```
 
-A class framework registers a filename suffix, a base class, imports, and an
-entrypoint. The generated class embeds that base class, so classfile code can
-call its methods and access its properties without an explicit receiver.
+The exact generated source may include compiler details not shown here. The
+important contract is that top-level formula statements populate the embedded
+`ModuleF`, and the framework entrypoint invokes `MainEntry` for a zero-value
+generated class.
 
-Top-level executable statements are emitted into the generated `MainEntry`
-method in source order. The framework entrypoint invokes `MainEntry` to
-configure the generated class instance.
+Do not declare the generated type, `MainEntry`, `Main`, or package `main`
+yourself. Do not call generated `XGot_`, `Gopt_`, `Gops_`, `Gopx_`, `Gopo_`,
+or numbered overload names from formula source.
 
-For complete implementation background, read the
-[official XGo classfile documentation](https://github.com/goplus/xgo/blob/main/doc/classfile.md).
+## Filename Rules
 
-## LLAR Classfiles
+The last underscore starts a custom class extension in general XGo classfile
+parsing. LLAR additionally obtains the generated formula type name from the
+filename prefix before the first underscore.
 
-LLAR registers two project classfiles:
+Use the established unambiguous form:
 
-| Filename suffix | Generated base class | Purpose |
-| --- | --- | --- |
-| `_llar.gox` | `formula.ModuleF` | Define a module build formula. |
-| `_cmp.gox` | `cmp.CmpApp` | Define an optional version comparator. |
+```text
+Zlib_llar.gox  -> class Zlib, extension _llar.gox
+Zlib_cmp.gox   -> class Zlib, extension _cmp.gox
+```
 
-For LLAR formula loading, the generated class name comes from the filename
-prefix before the first underscore. Keep that prefix a valid identifier and
-retain the registered suffix exactly.
+Keep the prefix a valid Go identifier. Do not derive a class name by trimming
+arbitrary suffix text in tooling; use XGo's filename rules and LLAR's actual
+loader path.
 
-The base classes and their methods are domain APIs. Do not infer them from XGo
-syntax. Read the API tables and source links in the parent `SKILL.md`.
+## File Structure
 
-## Imports and Names
-
-Imports use Go syntax. Standard-library packages are not automatically
-available:
+Imports, constants, named types, field declarations, and helper methods must
+appear before the first top-level executable statement. Once the parser enters
+the class entry body, the remaining top-level source is treated as executable
+classfile code.
 
 ```gox
 import "strings"
+
+func normalize(value string) string {
+	return strings.trimSpace(value)
+}
+
+id "owner/repo"
+fromVer "v1.0.0"
 ```
 
-Use the XGo spelling for every exported Go identifier: lowercase only its
-first letter. For example, write `os.readFile(path)`, not `os.ReadFile(path)`:
+A receiverless top-level function in a classfile becomes a method on the
+generated class, not a package function. Unqualified references inside it may
+resolve to generated fields, other generated methods, promoted base methods,
+package declarations, imports, framework exports, or builtins.
 
-```gox
-os.readFile(path)        // calls os.ReadFile(path)
-strings.trimSpace(value) // calls strings.TrimSpace(value)
-object.run()             // calls object.Run()
-```
+If package-level helpers are genuinely required, put them in an ordinary Go,
+XGo, or Gop source file supported by the owning build path. Formula repositories
+normally keep the required logic in the classfile.
 
-Apply this rule consistently in formulas and follow current LLAR fixtures.
+## Fields
+
+In an ordinary classfile, the first top-level `var` declaration before any
+function or executable statement forms generated class fields. Do not
+initialize those fields in that declaration. Later `var` declarations are
+package variables.
+
+Most formulas need no class fields. Prefer local variables inside hooks unless
+state must intentionally be shared by callbacks on the same generated formula
+instance.
 
 ## Calls
 
-Calls used as standalone statements may omit parentheses:
+Parenthesized Go calls always remain valid. A call used as a standalone
+statement may use command style:
 
 ```gox
-object.setName "value"
-object.configure "first", "second"
+c.buildType "Release"
+c.define "FEATURE", "ON"
+deps.require "owner/dependency", "v1.2.3"
 ```
 
-Calls used as expressions require parentheses:
+Use parentheses when consuming a return value or when normal Go expression
+syntax is clearer:
 
 ```gox
-result := object.value()
-err = object.run()
+depDir := ctx.outputDir(dep)
+data, err := proj.readFile("build.txt")
 ```
 
-Parenthesized Go-style calls remain valid. Do not remove parentheses from a
-call whose return value is used.
+Zero-argument methods can be auto-properties:
+
+```gox
+installDir := ctx.outputDir // ctx.OutputDir__0()
+if lastErr != nil {        // this.LastErr()
+	panic lastErr
+}
+```
+
+The Go API may encode overloads with `__0`, `__1`, and so on. Call only the XGo
+surface name. XGo selects `ctx.outputDir` or `ctx.outputDir(dep)` from the
+argument list.
 
 ## Lambdas
 
-Use `=>` for lambda expressions:
+LLAR hooks use XGo lambda expressions:
 
 ```gox
-value => value != ""
-(left, right) => left + right
-=> true
-(ctx, input, output) => {
-	output.write(input)
+ctx => ctx.setMetadata("-lfoo")
+(proj, deps) => {
+	deps.require "owner/dependency", "v1.2.3"
 }
+=> true
 ```
 
 Multiple parameters require parentheses. A block lambda uses ordinary Go/XGo
-statements and returns according to the expected function signature.
+statements and must match the function signature supplied by the current LLAR
+base class.
 
-## Auto-properties and Overloads
-
-A zero-argument method can be used as an auto-property:
-
-```gox
-status // may resolve to this.Status()
-```
-
-Use parentheses when a value participates in ordinary call syntax or when the
-API documentation presents it as a call.
-
-XGo can overload functions and methods. Generated Go implementations commonly
-use numbered suffixes such as `Method__0` and `Method__1`; XGo selects the
-overload from the argument list:
-
-```gox
-object.location()
-object.location(item)
-```
-
-Do not call the numbered Go names from classfile code. Use the XGo method name
-shown by the domain API.
-
-## Class Members
-
-Top-level classfile variables and functions belong to the generated class.
-They are not package-level globals or standalone functions.
-
-This means a helper can access another class member without an explicit
-receiver:
-
-```gox
-var prefix string
-
-func qualify(value string) string {
-	return prefix + value
-}
-```
-
-Package-level declarations from imported packages remain package members.
-Keep this distinction in mind when reasoning about state, closures, and helper
-calls generated from a classfile.
-
-## Literals and Loops
-
-XGo supports inferred slice literals:
-
-```gox
-values := ["first", "second"]
-```
-
-Map literals can infer their type from an assignment or parameter:
-
-```gox
-settings := {"mode": "value"}
-```
-
-When inference is ambiguous, use `make` and explicit assignments:
-
-```gox
-settings := make(map[string]string)
-settings["mode"] = "value"
-```
-
-Use Go range syntax or XGo `for in` syntax:
-
-```gox
-for _, value := range values {
-	_ = value
-}
-
-for value in values {
-	_ = value
-}
-```
-
-Do not range over LLAR `target.require` or `target.options`; the Formula matrix
-analyzer intentionally rejects that operation. This is a Formula constraint,
-not a general XGo limitation.
-
-## Strings and echo
-
-XGo string interpolation uses `${...}`:
-
-```gox
-message := "value=${value}"
-```
-
-Use `echo` as the XGo print shorthand:
-
-```gox
-echo message
-```
-
-Use ordinary string and standard-library operations when they make the data
-flow clearer. Import the required package explicitly.
+Do not infer a hook signature from an older formula. Read the current Go method
+on `formula.ModuleF`.
 
 ## Error Operators
 
@@ -247,42 +226,49 @@ XGo supports postfix error operators:
 
 | Syntax | Behavior |
 | --- | --- |
-| `call()!` | Panic when the error result is non-nil; otherwise yield the value. |
-| `call()?` | Return the error from the current function when non-nil. |
+| `call()!` | Panic when the final error result is non-nil; otherwise yield the non-error result. |
+| `call()?` | Return the error from the current function when its signature permits it. |
 | `call()?:fallback` | Use the fallback value when the call returns an error. |
 
-These operators must match the surrounding function signature. In LLAR hooks,
-prefer explicit error checks and record failures through the hook result API so
-the build or test reports the correct error.
+Framework behavior remains separate. In current LLAR, Formula hook boundaries
+recover panics and return contextual errors, so `proj.readFile(path)!` is
+appropriate for a required input. Whether an absent file is optional is a
+target-package decision and must be verified before using a fallback.
 
-## Generation Consequences
+Build wrapper methods that return no error cannot use a postfix error operator;
+their current implementation already panics on failure.
 
-Remember these properties when writing helpers or debugging generated code:
+## Literals, Loops, And Imports
 
-1. The filename determines the generated class identity and framework.
-2. The generated class embeds the framework base class.
-3. Top-level statements execute in `MainEntry` when the class instance is
-   initialized.
-4. Top-level variables and functions become fields and methods.
-5. Unqualified domain calls resolve against the embedded base class.
-6. Closures in top-level declarations may capture the generated class
-   instance.
-7. XGo overload selection hides numbered Go implementation suffixes.
+Use ordinary Go composite literals and range loops whenever they are clearer.
+XGo inferred literals and `for in` forms are also available:
 
-Do not rewrite a classfile as though it were a normal package-level Go file.
-When an error mentions generated Go, map the generated receiver, fields,
-methods, and overload names back to these classfile rules.
+```gox
+values := ["first", "second"]
+settings := {"mode": "static"}
 
-## Checklist
+for value in values {
+	_ = value
+}
+```
 
-Before editing a `.gox` file:
+When inference is ambiguous, use an explicit Go type or `make`. Standard
+library packages are not auto-imported; add Go imports explicitly.
 
-1. Confirm the registered filename suffix and base class.
-2. Read the domain API from the parent `SKILL.md` and linked source.
-3. Add explicit imports for standard-library packages.
-4. Use command-style calls only for standalone statements.
-5. Use parentheses when consuming return values.
-6. Treat top-level variables and functions as generated class members.
-7. Prefer explicit hook error handling over postfix error shortcuts.
-8. Validate the resulting classfile through LLAR rather than assuming that a
-   syntactically plausible construct maps to the intended domain API.
+For the full syntax surface, including comprehensions, optional parameters,
+keyword arguments, custom iterators, operators, rational numbers, and domain
+text literals, use the official XGo language guide. Do not restate or guess
+those features in a Formula change when ordinary Go syntax is sufficient.
+
+## Debugging Checklist
+
+1. Confirm the LLAR revision and its XGo/ixgo versions.
+2. Confirm `_llar.gox` or `_cmp.gox` registration in
+   `internal/ixgo/classfile.go`.
+3. Confirm the filename prefix resolves to the generated class LLAR looks up.
+4. Map top-level statements to `MainEntry` and hooks to their generated
+   function types.
+5. Map lowercase aliases, auto-properties, and overloads back to real Go APIs.
+6. Compile through LLAR's ixgo loader, not a different XGo CLI path.
+7. When a diagnostic mentions generated Go or an XGo AST node, inspect the
+   generated source or compiler path before changing Formula behavior.
