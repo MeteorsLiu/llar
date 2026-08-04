@@ -5,7 +5,7 @@ import (
 
 id "json-c/json-c"
 
-fromVer "json-c-0.18-20240915"
+fromVer "json-c-0.17-20230812"
 
 onBuild ctx => {
 	installDir := ctx.outputDir
