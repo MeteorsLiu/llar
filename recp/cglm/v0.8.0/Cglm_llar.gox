@@ -30,11 +30,13 @@ int main(void) {
 
 id "recp/cglm"
 
-fromVer "v0.8.5"
+fromVer "v0.8.0"
 
 // cglm is an optimized C99 math library. Its CMake build produces a single
-// `cglm` library from `src/`, installs public headers under `include/cglm`,
-// and generates a `cglm.pc` pkg-config file.
+// `cglm` library from `src/` and installs public headers under `include/cglm`.
+// A `cglm.pc` pkg-config file is installed from v0.8.2 onward; v0.8.0 and
+// v0.8.1 ship the same CMake build and install layout but no `.pc`, so the
+// metadata step falls back to hand-built flags for that range.
 //
 // Options mirror the meaningful choices of the Conan Center recipe:
 //   - shared: build the shared library (ON) instead of the static one (OFF).
@@ -65,16 +67,28 @@ onBuild ctx => {
 	c.build
 	c.install
 
-	// Derive consumer flags from the installed pkg-config file so metadata
-	// stays synchronized with the actual build (e.g. -lm on Linux/FreeBSD).
+	// Prefer the installed pkg-config file so metadata stays synchronized with
+	// the actual build (e.g. -lm on Linux/FreeBSD). v0.8.2+ install `cglm.pc`;
+	// v0.8.0 and v0.8.1 do not, so fall back to hand-built flags derived from
+	// the install layout when pkg-config cannot resolve cglm.
 	c.use installDir
 	capout => {
 		exec "pkg-config", "--cflags", "--libs", "cglm"
 	}
-	if lastErr != nil {
-		panic lastErr
+	if lastErr == nil {
+		ctx.setMetadata strings.trimSpace(output)
+		return
 	}
-	ctx.setMetadata strings.trimSpace(output)
+
+	// No usable `cglm.pc`: the CMake install still produces libcglm under
+	// <installDir>/lib and headers under <installDir>/include, matching the
+	// consumer flags the test uses.
+	flags := []string{
+		"-I" + filepath.join(installDir, "include"),
+		"-L" + filepath.join(installDir, "lib"),
+		"-lcglm", "-lm",
+	}
+	ctx.setMetadata strings.join(flags, " ")
 }
 
 onTest ctx => {
