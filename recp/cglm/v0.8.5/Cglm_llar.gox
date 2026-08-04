@@ -1,46 +1,9 @@
 import (
-	"os"
 	"path/filepath"
+	"os"
 	"slices"
 	"strings"
 )
-
-// copyTree recursively copies the directory tree at src into dst, preserving
-// the relative layout. It panics on any filesystem error.
-func copyTree(src, dst string) {
-	entries := os.readDir(src)!
-	if err := os.mkdirAll(dst, 0o755); err != nil {
-		panic err
-	}
-	for _, entry := range entries {
-		s := filepath.join(src, entry.name())
-		d := filepath.join(dst, entry.name())
-		if entry.isDir() {
-			copyTree(s, d)
-			continue
-		}
-		data := os.readFile(s)!
-		if err := os.writeFile(d, data, 0o644); err != nil {
-			panic err
-		}
-	}
-}
-
-// hasLibrary reports whether a cglm library artifact was installed under
-// <installDir>/lib. A header-only install has no such file.
-func hasLibrary(installDir string) bool {
-	libDir := filepath.join(installDir, "lib")
-	entries, err := os.readDir(libDir)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if strings.contains(entry.name(), "cglm") {
-			return true
-		}
-	}
-	return false
-}
 
 const consumerProgram = `#include <cglm/cglm.h>
 #include <stdio.h>
@@ -71,17 +34,14 @@ fromVer "v0.8.5"
 
 // cglm is an optimized C99 math library. Its CMake build produces a single
 // `cglm` library from `src/`, installs public headers under `include/cglm`,
-// and generates a `cglm.pc` pkg-config file. Upstream also supports a
-// header-only mode where consumers use only the installed headers.
+// and generates a `cglm.pc` pkg-config file.
 //
 // Options mirror the meaningful choices of the Conan Center recipe:
 //   - shared: build the shared library (ON) instead of the static one (OFF).
-//   - header_only: install headers only and build nothing.
 // The upstream CMake option CGLM_USE_TEST is always disabled; it builds the
 // upstream test suite, not the installed interface.
 defaults {
-	"shared":      "OFF",
-	"header_only": "OFF",
+	"shared": "OFF",
 }
 
 filter => {
@@ -90,34 +50,11 @@ filter => {
 			return false
 		}
 	}
-	for _, value := range target.options["header_only"] {
-		if value != "ON" && value != "OFF" {
-			return false
-		}
-	}
-	// A header-only package installs no library, so a shared/static choice is
-	// meaningless. Reject the combination rather than silently ignoring it.
-	if slices.contains(target.options["header_only"], "ON") &&
-		slices.contains(target.options["shared"], "ON") {
-		return false
-	}
 	return true
 }
 
 onBuild ctx => {
 	installDir := ctx.outputDir
-	headerOnly := slices.contains(target.options["header_only"], "ON")
-
-	if headerOnly {
-		// Header-only: install the public headers exactly as they ship under
-		// include/cglm, matching the Conan recipe's header_only packaging.
-		src := filepath.join(ctx.SourceDir, "include", "cglm")
-		dst := filepath.join(installDir, "include", "cglm")
-		copyTree(src, dst)
-		ctx.setMetadata "-I" + filepath.join(installDir, "include")
-		return
-	}
-
 	shared := slices.contains(target.options["shared"], "ON")
 
 	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
@@ -156,12 +93,11 @@ onTest ctx => {
 
 	// Derive consumer flags from the installed output, not from ctx.Out
 	// metadata: on a cache hit onBuild is skipped and the build result is
-	// empty, but the install directory is still populated. Always add the
-	// header path; add link flags only when a library was installed (a
-	// header-only install has just headers).
-	flags := []string{"-I" + filepath.join(installDir, "include")}
-	if hasLibrary(installDir) {
-		flags = append(flags, "-L"+filepath.join(installDir, "lib"), "-lcglm", "-lm")
+	// empty, but the install directory is still populated.
+	flags := []string{
+		"-I" + filepath.join(installDir, "include"),
+		"-L" + filepath.join(installDir, "lib"),
+		"-lcglm", "-lm",
 	}
 
 	binary := filepath.join(testBuild, "consumer")
