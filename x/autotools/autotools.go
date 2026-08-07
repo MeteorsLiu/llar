@@ -7,6 +7,7 @@ import (
 	"runtime"
 
 	"github.com/goplus/llar/internal/execbroker"
+	"github.com/goplus/llar/x/pkgconfig"
 )
 
 // AutoTools drives Autotools-style builds.
@@ -28,17 +29,13 @@ func New(sourceDir, buildDir, installDir string) *AutoTools {
 // Source overrides the source directory.
 func (a *AutoTools) Source(dir string) { a.sourceDir = dir }
 
-// Use configures the process environment so that compilers and build tools
-// find headers, libraries and pkg-config files from a non-system dependency
-// installed at root.
+// Use configures the process environment so that Autotools, compilers, and
+// pkg-config find a non-system dependency installed at root.
 func (a *AutoTools) Use(root string) {
 	includeDir := filepath.Join(root, "include")
 	libDir := filepath.Join(root, "lib")
-	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
 
-	if _, err := os.Stat(pkgconfigDir); err == nil {
-		prependPath("PKG_CONFIG_PATH", pkgconfigDir)
-	}
+	pkgconfig.Use(root)
 	prependPath("CMAKE_PREFIX_PATH", root)
 	if _, err := os.Stat(includeDir); err == nil {
 		prependPath("CMAKE_INCLUDE_PATH", includeDir)

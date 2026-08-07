@@ -1,9 +1,9 @@
 // export by github.com/goplus/ixgo/cmd/qexp
 
-package autotools
+package pkgconfig
 
 import (
-	q "github.com/goplus/llar/x/autotools"
+	q "github.com/goplus/llar/x/pkgconfig"
 
 	"reflect"
 
@@ -12,23 +12,25 @@ import (
 
 func init() {
 	ixgo.RegisterPackage(&ixgo.Package{
-		Name: "autotools",
-		Path: "github.com/goplus/llar/x/autotools",
+		Name: "pkgconfig",
+		Path: "github.com/goplus/llar/x/pkgconfig",
 		Deps: map[string]string{
+			"fmt": "fmt",
 			"github.com/goplus/llar/internal/execbroker": "execbroker",
-			"github.com/goplus/llar/x/pkgconfig":         "pkgconfig",
-			"os":                                         "os",
-			"path/filepath":                              "filepath",
-			"runtime":                                    "runtime",
+			"os":            "os",
+			"path/filepath": "filepath",
+			"strings":       "strings",
 		},
 		Interfaces: map[string]reflect.Type{},
-		NamedTypes: map[string]reflect.Type{
-			"AutoTools": reflect.TypeOf((*q.AutoTools)(nil)).Elem(),
-		},
+		NamedTypes: map[string]reflect.Type{},
 		AliasTypes: map[string]reflect.Type{},
 		Vars:       map[string]reflect.Value{},
 		Funcs: map[string]reflect.Value{
-			"New": reflect.ValueOf(q.New),
+			"CFlags":     reflect.ValueOf(q.CFlags),
+			"Libs":       reflect.ValueOf(q.Libs),
+			"Lookup":     reflect.ValueOf(q.Lookup),
+			"StaticLibs": reflect.ValueOf(q.StaticLibs),
+			"Use":        reflect.ValueOf(q.Use),
 		},
 		TypedConsts:   map[string]ixgo.TypedConst{},
 		UntypedConsts: map[string]ixgo.UntypedConst{},
