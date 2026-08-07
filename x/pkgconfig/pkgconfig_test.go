@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/goplus/llar/internal/execbroker"
@@ -22,6 +23,16 @@ func TestUse(t *testing.T) {
 
 	if got, want := os.Getenv("PKG_CONFIG_PATH"), dir+string(os.PathListSeparator)+"/existing"; got != want {
 		t.Fatalf("PKG_CONFIG_PATH = %q, want %q", got, want)
+	}
+}
+
+func TestUseIgnoresMissingDirectory(t *testing.T) {
+	t.Setenv("PKG_CONFIG_PATH", "/existing")
+
+	Use(t.TempDir())
+
+	if got := os.Getenv("PKG_CONFIG_PATH"); got != "/existing" {
+		t.Fatalf("PKG_CONFIG_PATH = %q, want unchanged", got)
 	}
 }
 
@@ -69,9 +80,48 @@ func TestQueries(t *testing.T) {
 	}
 }
 
+func TestQueryErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		detail string
+		want   string
+	}{
+		{name: "without stderr", want: `pkg-config "demo": exit status 1`},
+		{name: "with stderr", detail: "package not found", want: `pkg-config "demo": exit status 1: package not found`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := execbroker.Do(execbroker.Scope{
+				Middleware: func(req execbroker.Request) execbroker.Request {
+					req.Name = os.Args[0]
+					req.Args = []string{"-test.run=TestLookupHelperProcess"}
+					req.Env = append(os.Environ(),
+						"GO_WANT_PKGCONFIG_HELPER=1",
+						"GO_PKGCONFIG_HELPER_FAIL=1",
+						"GO_PKGCONFIG_HELPER_STDERR="+tt.detail,
+					)
+					return req
+				},
+			}, func() error {
+				_, err := Libs("demo")
+				return err
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestLookupHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_PKGCONFIG_HELPER") != "1" {
 		return
+	}
+	if os.Getenv("GO_PKGCONFIG_HELPER_FAIL") == "1" {
+		if detail := os.Getenv("GO_PKGCONFIG_HELPER_STDERR"); detail != "" {
+			fmt.Fprintln(os.Stderr, detail)
+		}
+		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stdout, "  -I/include -ldemo  ")
 	os.Exit(0)
