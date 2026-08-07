@@ -13,25 +13,27 @@ func TestUseSetsEnv(t *testing.T) {
 	root := t.TempDir()
 	includeDir := filepath.Join(root, "include")
 	libDir := filepath.Join(root, "lib")
-	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
-	for _, d := range []string{includeDir, libDir, pkgconfigDir} {
+	for _, d := range []string{includeDir, libDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
 	}
 
 	for _, key := range []string{
-		"PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH",
+		"CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH",
 		"CMAKE_LIBRARY_PATH", "INCLUDE", "LIB", "CPPFLAGS", "LDFLAGS",
 	} {
 		t.Setenv(key, "")
 	}
+	t.Setenv("PKG_CONFIG_PATH", "/existing")
 
 	c := New("", "", "")
 	c.Use(root)
+	if got := os.Getenv("PKG_CONFIG_PATH"); got != "/existing" {
+		t.Fatalf("PKG_CONFIG_PATH = %q, want unchanged", got)
+	}
 
 	for key, want := range map[string]string{
-		"PKG_CONFIG_PATH":    pkgconfigDir,
 		"CMAKE_PREFIX_PATH":  root,
 		"CMAKE_INCLUDE_PATH": includeDir,
 		"CMAKE_LIBRARY_PATH": libDir,
@@ -62,18 +64,11 @@ func TestUsePartialDirs(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "include"), 0o755)
 
-	for _, key := range []string{
-		"PKG_CONFIG_PATH", "CMAKE_LIBRARY_PATH",
-	} {
-		t.Setenv(key, "")
-	}
+	t.Setenv("CMAKE_LIBRARY_PATH", "")
 
 	c := New("", "", "")
 	c.Use(root)
 
-	if got := os.Getenv("PKG_CONFIG_PATH"); got != "" {
-		t.Errorf("PKG_CONFIG_PATH = %q, want empty", got)
-	}
 	if got := os.Getenv("CMAKE_LIBRARY_PATH"); got != "" {
 		t.Errorf("CMAKE_LIBRARY_PATH = %q, want empty", got)
 	}
