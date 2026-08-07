@@ -158,6 +158,21 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		defer os.RemoveAll(tmpDir)
 		buildOpts.WorkspaceDir = tmpDir
 	}
+	rewriter, sysrootMod, err := prepareCrossCompile(
+		ctx,
+		store,
+		module.Version{Path: mods[0].Path, Version: mods[0].Version},
+		matrix,
+		buildOpts,
+	)
+	if err != nil {
+		return err
+	}
+	if rewriter != nil {
+		defer rewriter.Close()
+		wrapCrossCompileHooks(mods, rewriter, buildOutput, buildOutput)
+		mods = injectSysroot(mods, sysrootMod)
+	}
 
 	builder, err := build.NewBuilder(buildOpts)
 	if err != nil {

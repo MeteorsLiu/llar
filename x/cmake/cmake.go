@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/goplus/llar/internal/execbroker"
 )
@@ -81,6 +82,7 @@ func (c *CMake) Use(root string) {
 		}
 	}
 	prependPath("CMAKE_PREFIX_PATH", root)
+	prependPath("CMAKE_FIND_ROOT_PATH", root)
 	if hasInclude {
 		prependPath("CMAKE_INCLUDE_PATH", includeDir)
 	}
@@ -123,6 +125,9 @@ func (c *CMake) Configure(args ...string) {
 	}
 	if c.buildType != "" {
 		cmakeArgs = append(cmakeArgs, "-DCMAKE_BUILD_TYPE:STRING="+c.buildType)
+	}
+	if roots := os.Getenv("CMAKE_FIND_ROOT_PATH"); roots != "" {
+		cmakeArgs = append(cmakeArgs, "-DCMAKE_FIND_ROOT_PATH:STRING="+strings.Join(filepath.SplitList(roots), ";"))
 	}
 	cmakeArgs = append(cmakeArgs, c.definesArgs()...)
 	cmakeArgs = append(cmakeArgs, args...)

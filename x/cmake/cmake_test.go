@@ -38,7 +38,7 @@ func TestUseSetsEnv(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		"PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH",
+		"PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CMAKE_FIND_ROOT_PATH", "CMAKE_INCLUDE_PATH",
 		"CMAKE_LIBRARY_PATH", "INCLUDE", "LIB", "CPPFLAGS", "LDFLAGS",
 	} {
 		setenv(t, key, "")
@@ -48,10 +48,11 @@ func TestUseSetsEnv(t *testing.T) {
 	c.Use(root)
 
 	for key, want := range map[string]string{
-		"PKG_CONFIG_PATH":    pkgconfigDir,
-		"CMAKE_PREFIX_PATH":  root,
-		"CMAKE_INCLUDE_PATH": includeDir,
-		"CMAKE_LIBRARY_PATH": libDir,
+		"PKG_CONFIG_PATH":      pkgconfigDir,
+		"CMAKE_PREFIX_PATH":    root,
+		"CMAKE_FIND_ROOT_PATH": root,
+		"CMAKE_INCLUDE_PATH":   includeDir,
+		"CMAKE_LIBRARY_PATH":   libDir,
 	} {
 		if got := execbroker.Getenv(key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
@@ -93,6 +94,18 @@ func TestUsePartialDirs(t *testing.T) {
 	}
 	if got := execbroker.Getenv("CMAKE_LIBRARY_PATH"); got != "" {
 		t.Errorf("CMAKE_LIBRARY_PATH = %q, want empty", got)
+	}
+}
+
+func TestUseMultipleRoots(t *testing.T) {
+	t.Setenv("CMAKE_FIND_ROOT_PATH", "")
+	c := New("", "", "")
+	c.Use("/deps/one")
+	c.Use("/deps/two")
+
+	sep := string(os.PathListSeparator)
+	if got, want := os.Getenv("CMAKE_FIND_ROOT_PATH"), "/deps/two"+sep+"/deps/one"; got != want {
+		t.Fatalf("CMAKE_FIND_ROOT_PATH = %q, want %q", got, want)
 	}
 }
 
