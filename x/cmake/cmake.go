@@ -63,16 +63,23 @@ func (c *CMake) DefineBool(key string, value bool) {
 }
 
 // Use configures the process environment so that CMake and compilers find
-// headers and libraries from a non-system dependency installed at root.
+// headers, libraries and pkg-config files from a non-system dependency
+// installed at root.
 func (c *CMake) Use(root string) {
 	includeDir := filepath.Join(root, "include")
 	libDir := filepath.Join(root, "lib")
+	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
 
 	_, errInclude := os.Stat(includeDir)
 	_, errLib := os.Stat(libDir)
 	hasInclude := errInclude == nil
 	hasLib := errLib == nil
 
+	if hasLib {
+		if _, err := os.Stat(pkgconfigDir); err == nil {
+			prependPath("PKG_CONFIG_PATH", pkgconfigDir)
+		}
+	}
 	prependPath("CMAKE_PREFIX_PATH", root)
 	if hasInclude {
 		prependPath("CMAKE_INCLUDE_PATH", includeDir)
