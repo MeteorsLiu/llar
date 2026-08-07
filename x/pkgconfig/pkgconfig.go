@@ -23,6 +23,11 @@ func Use(root string) {
 	os.Setenv("PKG_CONFIG_PATH", dir)
 }
 
+// Lookup returns the compiler and linker flags for name.
+func Lookup(name string) (string, error) {
+	return lookup(name, "--cflags", "--libs")
+}
+
 // CFlags returns the compiler flags for name.
 func CFlags(name string) (string, error) {
 	return lookup(name, "--cflags")

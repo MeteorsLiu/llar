@@ -28,6 +28,7 @@ func init() {
 		Funcs: map[string]reflect.Value{
 			"CFlags":     reflect.ValueOf(q.CFlags),
 			"Libs":       reflect.ValueOf(q.Libs),
+			"Lookup":     reflect.ValueOf(q.Lookup),
 			"StaticLibs": reflect.ValueOf(q.StaticLibs),
 			"Use":        reflect.ValueOf(q.Use),
 		},

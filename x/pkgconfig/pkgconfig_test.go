@@ -31,6 +31,7 @@ func TestQueries(t *testing.T) {
 		query func(string) (string, error)
 		args  []string
 	}{
+		{name: "lookup", query: Lookup, args: []string{"--cflags", "--libs", "demo"}},
 		{name: "cflags", query: CFlags, args: []string{"--cflags", "demo"}},
 		{name: "libs", query: Libs, args: []string{"--libs", "demo"}},
 		{name: "static libs", query: StaticLibs, args: []string{"--static", "--libs", "demo"}},
