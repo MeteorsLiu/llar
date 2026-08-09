@@ -200,9 +200,9 @@ func parseRequest(r *http.Request) (request, error) {
 		if len(values) != 1 || values[0] == "" {
 			return request{}, fmt.Errorf("matrix %q requires exactly one value", key)
 		}
-		// Requests carry a flat matrix. Platform dimensions propagate to
+		// Requests carry a flat matrix. Target requirements propagate to
 		// dependencies; all other dimensions are package build options.
-		if key == "os" || key == "arch" {
+		if key == "os" || key == "arch" || key == "libc" {
 			if require == nil {
 				require = make(map[string][]string)
 			}

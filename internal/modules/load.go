@@ -61,6 +61,8 @@ type Options struct {
 	// FormulaStore is the store for downloading and caching formulas.
 	FormulaStore repo.Store
 	Matrix       classfile.Matrix
+	// Roots adds caller-supplied requirements to the main module before MVS.
+	Roots []module.Version
 }
 
 func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
@@ -196,6 +198,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	if err != nil {
 		return nil, err
 	}
+	mainDeps = append(mainDeps, opts.Roots...)
 	cmp := func(p, v1, v2 string) int {
 		// none is an internal version for MVS, which means the smallest
 		if v1 == "none" && v2 != "none" {

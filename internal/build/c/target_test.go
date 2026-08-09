@@ -1,4 +1,4 @@
-package crosscompile
+package c
 
 import (
 	"os"
@@ -8,17 +8,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/mod/module"
 )
 
-type fakeToolchain struct{}
-
-func (fakeToolchain) CC() string       { return "/llvm/bin/clang" }
-func (fakeToolchain) CXX() string      { return "/llvm/bin/clang++" }
-func (fakeToolchain) Archiver() string { return "/llvm/bin/llvm-ar" }
-func (fakeToolchain) Ranlib() string   { return "/llvm/bin/llvm-ranlib" }
-func (fakeToolchain) NM() string       { return "/llvm/bin/llvm-nm" }
-func (fakeToolchain) Strip() string    { return "/llvm/bin/llvm-strip" }
+func fakeToolchain() Toolchain {
+	return NewToolchain(
+		"/llvm/bin/clang",
+		"/llvm/bin/clang++",
+		"/llvm/bin/llvm-ar",
+		"/llvm/bin/llvm-ranlib",
+		"/llvm/bin/llvm-nm",
+		"/llvm/bin/llvm-strip",
+	)
+}
 
 func TestSysroot(t *testing.T) {
 	want := module.Version{Path: "bminor/glibc", Version: "glibc-2.17"}
@@ -35,19 +38,39 @@ func TestSysroot(t *testing.T) {
 	}
 }
 
-func TestNewRequiresSysrootMetadata(t *testing.T) {
-	if _, err := New("linux", "arm64", fakeToolchain{}, "-L/lib"); err == nil || !strings.Contains(err.Error(), "has no sysroot") {
-		t.Fatalf("New error = %v, want missing sysroot", err)
-	}
-}
-
-func TestNewWritesCMakeToolchain(t *testing.T) {
-	c, err := New("linux", "arm64", fakeToolchain{}, "--sysroot=/sdk")
+func TestBootstrapTargetOmitsSysroot(t *testing.T) {
+	c, err := NewTarget(Config{Matrix: "arm64-linux", Toolchain: fakeToolchain()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := c.toolchainFile
 	t.Cleanup(func() { _ = c.Close() })
+
+	patch := c.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c"}})
+	if got, want := patch.PrependArg, []string{"--target=aarch64-linux-gnu"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("PrependArg = %q, want %q", got, want)
+	}
+	if patch := c.Use(build.Command{Name: "pkg-config"}); patch.Env != nil {
+		t.Fatalf("pkg-config Patch = %+v, want no sysroot environment", patch)
+	}
+
+	patch = c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	data, err := os.ReadFile(strings.TrimPrefix(patch.AppendArg[0], "-DCMAKE_TOOLCHAIN_FILE:FILEPATH="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "CMAKE_SYSROOT") {
+		t.Fatalf("bootstrap CMake toolchain contains CMAKE_SYSROOT:\n%s", data)
+	}
+}
+
+func TestUseCMakeWritesToolchainLazily(t *testing.T) {
+	c := newTestTarget(t)
+	if c.toolchainFile != "" || c.tempDir != "" {
+		t.Fatalf("New created CMake files: toolchainFile=%q tempDir=%q", c.toolchainFile, c.tempDir)
+	}
+
+	c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	path := c.toolchainFile
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -67,24 +90,24 @@ func TestNewWritesCMakeToolchain(t *testing.T) {
 }
 
 func TestUseCMake(t *testing.T) {
-	c := newTestCrossCompile(t)
-	patch := c.Use(Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	c := newTestTarget(t)
+	patch := c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
 	if got, want := patch.AppendArg, []string{"-DCMAKE_TOOLCHAIN_FILE:FILEPATH=" + c.toolchainFile}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
 	}
-	patch = c.Use(Command{Name: "cmake", Args: []string{"--build", "build"}})
+	patch = c.Use(build.Command{Name: "cmake", Args: []string{"--build", "build"}})
 	if len(patch.AppendArg) != 0 {
 		t.Fatalf("build Patch = %+v, want no toolchain argument", patch)
 	}
-	patch = c.Use(Command{Name: "cmake", Args: []string{"-S", ".", "--toolchain", "/custom.cmake"}})
+	patch = c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "--toolchain", "/custom.cmake"}})
 	if len(patch.AppendArg) != 0 {
 		t.Fatalf("explicit toolchain Patch = %+v", patch)
 	}
 }
 
 func TestUseDirectCommands(t *testing.T) {
-	c := newTestCrossCompile(t)
-	patch := c.Use(Command{Name: "cc", Args: []string{"-c", "a.c"}})
+	c := newTestTarget(t)
+	patch := c.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c"}})
 	if patch.Name != "/llvm/bin/clang" {
 		t.Fatalf("Name = %q", patch.Name)
 	}
@@ -92,18 +115,18 @@ func TestUseDirectCommands(t *testing.T) {
 	if !reflect.DeepEqual(patch.PrependArg, want) {
 		t.Fatalf("PrependArg = %q, want %q", patch.PrependArg, want)
 	}
-	patch = c.Use(Command{Name: "cc", Args: []string{"--target=custom", "--sysroot=/custom"}})
+	patch = c.Use(build.Command{Name: "cc", Args: []string{"--target=custom", "--sysroot=/custom"}})
 	if len(patch.PrependArg) != 0 {
 		t.Fatalf("explicit compiler flags were duplicated: %q", patch.PrependArg)
 	}
-	if patch := c.Use(Command{Name: filepath.Join("custom", "cc")}); patch.Name != "" {
+	if patch := c.Use(build.Command{Name: filepath.Join("custom", "cc")}); patch.Name != "" {
 		t.Fatalf("explicit compiler path was rewritten: %+v", patch)
 	}
 }
 
 func TestUseAutotools(t *testing.T) {
-	c := newTestCrossCompile(t)
-	patch := c.Use(Command{
+	c := newTestTarget(t)
+	patch := c.Use(build.Command{
 		Name: "/src/configure",
 		Args: []string{"--build=x86_64-apple-darwin"},
 		Env:  []string{"CC=/custom/cc", "CFLAGS=-O2 --target=custom"},
@@ -120,9 +143,9 @@ func TestUseAutotools(t *testing.T) {
 }
 
 func TestUsePkgConfig(t *testing.T) {
-	c := newTestCrossCompile(t)
+	c := newTestTarget(t)
 	depPaths := strings.Join([]string{"/deps/a/lib/pkgconfig", "/deps/b/lib/pkgconfig"}, string(os.PathListSeparator))
-	patch := c.Use(Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_PATH=" + depPaths}})
+	patch := c.Use(build.Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_PATH=" + depPaths}})
 	if got, _ := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
 		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q", got)
 	}
@@ -132,15 +155,15 @@ func TestUsePkgConfig(t *testing.T) {
 			t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", got, want)
 		}
 	}
-	patch = c.Use(Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_LIBDIR=/custom"}})
+	patch = c.Use(build.Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_LIBDIR=/custom"}})
 	if got, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR"); got != "/custom" {
 		t.Fatalf("PKG_CONFIG_LIBDIR override = %q, want /custom", got)
 	}
 }
 
-func newTestCrossCompile(t *testing.T) *CrossCompile {
+func newTestTarget(t *testing.T) *Target {
 	t.Helper()
-	c, err := New("linux", "arm64", fakeToolchain{}, "--sysroot=/sdk")
+	c, err := NewTarget(Config{Matrix: "arm64-linux|shared", Toolchain: fakeToolchain(), Sysroot: "/sdk"})
 	if err != nil {
 		t.Fatal(err)
 	}

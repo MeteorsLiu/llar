@@ -539,6 +539,26 @@ func TestConvertToModules_InjectsSelectedMatrix(t *testing.T) {
 	}
 }
 
+func TestLoad_AddsRootsToMainRequirements(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	main := module.Version{Path: "towner/withdeps", Version: "1.0.0"}
+	root := module.Version{Path: "towner/leafmod", Version: "2.0.0"}
+
+	mods, err := Load(context.Background(), main, Options{
+		FormulaStore: store,
+		Roots:        []module.Version{root},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findModule(mods, root.Path); got == nil || got.Version != root.Version {
+		t.Fatalf("root module = %+v, want %+v", got, root)
+	}
+	if got, want := depVersions(mods[0]), []module.Version{root}; !slices.Equal(got, want) {
+		t.Fatalf("main deps = %+v, want %+v", got, want)
+	}
+}
+
 func TestLoad_FilterRejectsSelectedMatrix(t *testing.T) {
 	store := setupTestStore(t, "testdata/load")
 	ctx := context.Background()

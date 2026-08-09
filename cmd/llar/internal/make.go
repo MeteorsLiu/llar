@@ -12,11 +12,14 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
+	"github.com/goplus/llar/internal/build/c"
+	"github.com/goplus/llar/internal/build/c/llvm"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/modules/modlocal"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
+	ccmetadata "github.com/goplus/llar/x/metadata/cc"
 	"github.com/spf13/cobra"
 )
 
@@ -129,10 +132,17 @@ func hostMatrix() formula.Matrix {
 // hooks triggered — each dependency is verified by its own
 // `llar test <dep>` invocation.
 func buildModule(ctx context.Context, store repo.Store, modPath, version string, matrix formula.Matrix, runTest bool) error {
-	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
+	root := module.Version{Path: modPath, Version: version}
+	targetMatrix, crossCompile := crossCompileTarget(matrix)
+	sysroot, useDefaultSysroot := crossCompileSysroot(root, matrix)
+	loadOpts := modules.Options{
 		FormulaStore: store,
 		Matrix:       matrix,
-	})
+	}
+	if useDefaultSysroot {
+		loadOpts.Roots = []module.Version{sysroot}
+	}
+	mods, err := modules.Load(ctx, root, loadOpts)
 	if err != nil {
 		return fmt.Errorf("failed to load modules: %w", err)
 	}
@@ -158,22 +168,61 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		defer os.RemoveAll(tmpDir)
 		buildOpts.WorkspaceDir = tmpDir
 	}
-	rewriter, sysrootMod, err := prepareCrossCompile(
-		ctx,
-		store,
-		module.Version{Path: mods[0].Path, Version: mods[0].Version},
-		matrix,
-		buildOpts,
-	)
-	if err != nil {
-		return err
-	}
-	if rewriter != nil {
-		defer rewriter.Close()
-		wrapCrossCompileHooks(mods, rewriter, buildOutput, buildOutput)
-		mods = injectSysroot(mods, sysrootMod)
-	}
+	if crossCompile {
+		llvmToolchain, err := llvm.New()
+		if err != nil {
+			return fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
+		}
+		bootstrapTarget, err := c.NewTarget(c.Config{
+			Matrix:    targetMatrix,
+			Toolchain: llvmToolchain.Toolchain,
+		})
+		if err != nil {
+			return err
+		}
+		defer bootstrapTarget.Close()
+		buildOpts.Target = bootstrapTarget
 
+		if useDefaultSysroot {
+			// A successful Load includes every Options.Roots path in the selected graph.
+			var selectedSysroot *modules.Module
+			for _, mod := range mods {
+				if mod.Path == sysroot.Path {
+					selectedSysroot = mod
+					break
+				}
+			}
+
+			sysrootOpts := buildOpts
+			sysrootOpts.RunTest = false
+			sysrootBuilder, err := build.NewBuilder(sysrootOpts)
+			if err != nil {
+				return fmt.Errorf("failed to create sysroot builder: %w", err)
+			}
+			sysrootResults, err := sysrootBuilder.Build(ctx, []*modules.Module{selectedSysroot})
+			if err != nil {
+				return fmt.Errorf("failed to build sysroot %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
+			}
+			metadata, err := ccmetadata.Parse(sysrootResults[0].Metadata)
+			if err != nil {
+				return fmt.Errorf("failed to parse sysroot metadata for %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
+			}
+			if metadata.Sysroot() == "" {
+				return fmt.Errorf("sysroot metadata for %s@%s has no sysroot", selectedSysroot.Path, selectedSysroot.Version)
+			}
+
+			configuredTarget, err := c.NewTarget(c.Config{
+				Matrix:    targetMatrix,
+				Toolchain: llvmToolchain.Toolchain,
+				Sysroot:   metadata.Sysroot(),
+			})
+			if err != nil {
+				return err
+			}
+			defer configuredTarget.Close()
+			buildOpts.Target = configuredTarget
+		}
+	}
 	builder, err := build.NewBuilder(buildOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create builder: %w", err)

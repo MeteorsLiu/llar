@@ -53,11 +53,11 @@ func TestParseRequest(t *testing.T) {
 		},
 		{
 			name:        "require and options",
-			target:      "/v1/artifacts/madler/zlib@v1.3.1?os=linux&arch=amd64&debug=OFF&shared=ON",
+			target:      "/v1/artifacts/madler/zlib@v1.3.1?os=linux&arch=amd64&libc=glibc-2.13&debug=OFF&shared=ON",
 			wantModule:  "madler/zlib",
 			wantVer:     "v1.3.1",
-			wantMatrix:  "amd64-linux|OFF-ON",
-			wantRequire: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
+			wantMatrix:  "amd64-glibc-2.13-linux|OFF-ON",
+			wantRequire: map[string][]string{"arch": {"amd64"}, "libc": {"glibc-2.13"}, "os": {"linux"}},
 			wantOptions: map[string][]string{"debug": {"OFF"}, "shared": {"ON"}},
 		},
 		{name: "wrong path", target: "/v1/modules/madler/zlib?os=linux", wantErr: "artifact path not found"},
@@ -94,7 +94,7 @@ func TestParseRequest(t *testing.T) {
 			for key, values := range req.query {
 				values[0] = "changed"
 				matrixValues := req.matrix.Options[key]
-				if key == "os" || key == "arch" {
+				if key == "os" || key == "arch" || key == "libc" {
 					matrixValues = req.matrix.Require[key]
 				}
 				if matrixValues[0] == "changed" {
