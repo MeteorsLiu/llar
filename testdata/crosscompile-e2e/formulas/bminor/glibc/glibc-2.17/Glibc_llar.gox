@@ -1,0 +1,8 @@
+id "bminor/glibc"
+
+fromVer "glibc-2.17"
+
+onBuild ctx => {
+	exec! "./install-sysroot", ctx.outputDir
+	ctx.setMetadata "--sysroot="+ctx.outputDir
+}
