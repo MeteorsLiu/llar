@@ -140,9 +140,13 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 	if values := matrix.Require["arch"]; len(values) > 0 {
 		targetArch = values[0]
 	}
+	crossCompile := targetOS != runtime.GOOS || targetArch != runtime.GOARCH
+	if runTest && crossCompile {
+		return fmt.Errorf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
+	}
 	var targetRoot module.Version
 	var useCTarget bool
-	if targetOS != runtime.GOOS || targetArch != runtime.GOARCH {
+	if crossCompile {
 		// TODO: Add other language target policies alongside this C case when
 		// they provide build.Target implementations.
 		cSysroot, ok := c.Sysroot(targetOS, targetArch)
