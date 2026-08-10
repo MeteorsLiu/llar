@@ -78,9 +78,13 @@ func TestDarwinTarget(t *testing.T) {
 		t.Fatalf("PrependArg = %q, want prepared defaults %q", patch.PrependArg, want)
 	}
 
-	patch = target.Use(build.Command{Name: "/src/configure"})
-	if got, want := patch.AppendArg, []string{"--host=x86_64-apple-darwin"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("configure AppendArg = %q, want %q", got, want)
+	configure := filepath.Join(t.TempDir(), "configure")
+	if err := os.WriteFile(configure, []byte("#!/bin/sh\nCHOST=${CHOST-}\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	patch = target.Use(build.Command{Name: configure})
+	if len(patch.AppendArg) != 0 {
+		t.Fatalf("configure AppendArg = %q, want no unsupported arguments", patch.AppendArg)
 	}
 	for key, values := range map[string][]string{
 		"CC": {"/llvm/bin/clang", "--target=x86_64-apple-macos10.13", "-fuse-ld=lld", "-isysroot/sdk"},
@@ -225,8 +229,12 @@ func TestUseDirectCommands(t *testing.T) {
 
 func TestUseAutotools(t *testing.T) {
 	c := newTestTarget(t)
+	configure := filepath.Join(t.TempDir(), "configure")
+	if err := os.WriteFile(configure, []byte("#!/bin/sh\n# options: --build=BUILD --host=HOST\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	patch := c.Use(build.Command{
-		Name: "/src/configure",
+		Name: configure,
 		Args: []string{"--build=x86_64-apple-darwin"},
 		Env:  []string{"CC=/custom/cc", "CFLAGS=-O2 --target=custom"},
 	})
@@ -241,6 +249,11 @@ func TestUseAutotools(t *testing.T) {
 	}
 	if got, want := patch.AppendArg, []string{"--host=aarch64-linux-gnu"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
+	}
+
+	patch = c.Use(build.Command{Name: configure, Args: []string{"--host=custom-linux"}})
+	if len(patch.AppendArg) != 0 {
+		t.Fatalf("explicit host AppendArg = %q, want no duplicate host", patch.AppendArg)
 	}
 }
 

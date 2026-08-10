@@ -1,6 +1,7 @@
 package c
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -166,11 +167,27 @@ func (c *Target) autotoolsPatch(cmd build.Command) build.Patch {
 	env = setMissingEnv(env, "NM", c.toolchain.NM())
 	env = setMissingEnv(env, "STRIP", c.toolchain.Strip())
 
-	var args []string
-	if !hasOption(cmd.Args, "--host") {
-		args = append(args, "--host="+c.autotoolsHost)
+	for _, arg := range cmd.Args {
+		if arg == "--host" || strings.HasPrefix(arg, "--host=") {
+			return build.Patch{Env: env}
+		}
 	}
-	return build.Patch{AppendArg: args, Env: env}
+
+	configurePath := cmd.Name
+	if !filepath.IsAbs(configurePath) {
+		configurePath = filepath.Join(cmd.Dir, configurePath)
+	}
+	data, err := os.ReadFile(configurePath)
+	if err != nil {
+		panic(fmt.Errorf("inspect configure options for %s: %w", c.target, err))
+	}
+	// Only scripts that declare --host receive the Autoconf target tuple.
+	// For example, zlib's custom configure declares CHOST but rejects --host.
+	patch := build.Patch{Env: env}
+	if bytes.Contains(data, []byte("--host")) {
+		patch.AppendArg = []string{"--host=" + c.autotoolsHost}
+	}
+	return patch
 }
 
 func (c *Target) pkgConfigPatch(commandEnv []string) build.Patch {
@@ -275,15 +292,6 @@ func isCMakeConfigure(args []string) bool {
 func hasCMakeToolchain(args []string) bool {
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-DCMAKE_TOOLCHAIN_FILE") || arg == "--toolchain" || strings.HasPrefix(arg, "--toolchain=") {
-			return true
-		}
-	}
-	return false
-}
-
-func hasOption(args []string, name string) bool {
-	for _, arg := range args {
-		if arg == name || strings.HasPrefix(arg, name+"=") {
 			return true
 		}
 	}
