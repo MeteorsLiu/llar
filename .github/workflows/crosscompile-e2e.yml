@@ -109,14 +109,28 @@ jobs:
           name: zlib-linux-arm64
           path: ${{ runner.temp }}/zlib-linux-arm64
 
-      - name: Link and run consumer
+      - name: Inspect, link, and run consumer
         run: |
+          lib="$RUNNER_TEMP/zlib-linux-arm64/lib/libz.a"
+          member_dir="$RUNNER_TEMP/zlib-members"
+          consumer="$RUNNER_TEMP/zlib-consumer"
+
+          mkdir -p "$member_dir"
+          (
+            cd "$member_dir"
+            ar x "$lib" adler32.o
+          )
+          file "$member_dir/adler32.o" | tee "$RUNNER_TEMP/zlib-format.txt"
+          grep -F "ELF 64-bit LSB relocatable, ARM aarch64" "$RUNNER_TEMP/zlib-format.txt"
+
           cc \
             -I"$RUNNER_TEMP/zlib-linux-arm64/include" \
             testdata/crosscompile-e2e/consumer.c \
-            "$RUNNER_TEMP/zlib-linux-arm64/lib/libz.a" \
-            -o "$RUNNER_TEMP/zlib-consumer"
-          "$RUNNER_TEMP/zlib-consumer"
+            "$lib" \
+            -o "$consumer"
+          ldd "$consumer" | tee "$RUNNER_TEMP/dynamic-libraries.txt"
+          grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/dynamic-libraries.txt"
+          "$consumer"
 
   build-darwin-arm64:
     name: "Build zlib: Linux amd64 host to Darwin arm64 target"
@@ -204,11 +218,19 @@ jobs:
           name: zlib-darwin-arm64
           path: ${{ runner.temp }}/zlib-darwin-arm64
 
-      - name: Link and run consumer
+      - name: Inspect, link, and run consumer
         run: |
+          lib="$RUNNER_TEMP/zlib-darwin-arm64/lib/libz.a"
+          consumer="$RUNNER_TEMP/zlib-consumer"
+
+          lipo -info "$lib" | tee "$RUNNER_TEMP/zlib-format.txt"
+          grep -F "architecture: arm64" "$RUNNER_TEMP/zlib-format.txt"
+
           cc \
             -I"$RUNNER_TEMP/zlib-darwin-arm64/include" \
             testdata/crosscompile-e2e/consumer.c \
-            "$RUNNER_TEMP/zlib-darwin-arm64/lib/libz.a" \
-            -o "$RUNNER_TEMP/zlib-consumer"
-          "$RUNNER_TEMP/zlib-consumer"
+            "$lib" \
+            -o "$consumer"
+          otool -L "$consumer" | tee "$RUNNER_TEMP/dynamic-libraries.txt"
+          grep -F "/usr/lib/libSystem.B.dylib" "$RUNNER_TEMP/dynamic-libraries.txt"
+          "$consumer"
