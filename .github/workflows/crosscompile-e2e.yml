@@ -1,4 +1,4 @@
-name: Cross Compile E2E
+name: Cross Compile E2E (Linux hosts to arm64 targets)
 
 on:
   push:
@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   build-linux-arm64:
+    name: "Build zlib: Linux amd64 host to Linux arm64 target"
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -94,6 +95,7 @@ jobs:
           if-no-files-found: error
 
   run-linux-arm64:
+    name: "Run zlib: Linux arm64 runner consumes Linux arm64 artifact"
     needs: build-linux-arm64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
@@ -119,6 +121,7 @@ jobs:
           "$RUNNER_TEMP/zlib-consumer"
 
   build-darwin-arm64:
+    name: "Build zlib: Linux arm64 host to Darwin arm64 target"
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     steps:
@@ -193,6 +196,7 @@ jobs:
           if-no-files-found: error
 
   run-darwin-arm64:
+    name: "Run zlib: macOS arm64 runner consumes Darwin arm64 artifact"
     needs: build-darwin-arm64
     runs-on: macos-14
     timeout-minutes: 10
