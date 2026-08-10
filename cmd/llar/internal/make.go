@@ -133,14 +133,31 @@ func hostMatrix() formula.Matrix {
 // `llar test <dep>` invocation.
 func buildModule(ctx context.Context, store repo.Store, modPath, version string, matrix formula.Matrix, runTest bool) error {
 	root := module.Version{Path: modPath, Version: version}
-	targetMatrix, crossCompile := crossCompileTarget(matrix)
-	sysroot, useDefaultSysroot := crossCompileSysroot(root, matrix)
+	var targetOS, targetArch string
+	if values := matrix.Require["os"]; len(values) > 0 {
+		targetOS = values[0]
+	}
+	if values := matrix.Require["arch"]; len(values) > 0 {
+		targetArch = values[0]
+	}
+	var targetRoot module.Version
+	var useCTarget bool
+	if targetOS != runtime.GOOS || targetArch != runtime.GOARCH {
+		// TODO: Add other language target policies alongside this C case when
+		// they provide build.Target implementations.
+		cSysroot, ok := c.Sysroot(targetOS, targetArch)
+		useCTarget = ok
+		_, customLibc := matrix.Require["libc"]
+		if useCTarget && !customLibc && root.Path != cSysroot.Path {
+			targetRoot = cSysroot
+		}
+	}
 	loadOpts := modules.Options{
 		FormulaStore: store,
 		Matrix:       matrix,
 	}
-	if useDefaultSysroot {
-		loadOpts.Roots = []module.Version{sysroot}
+	if targetRoot != (module.Version{}) {
+		loadOpts.Roots = []module.Version{targetRoot}
 	}
 	mods, err := modules.Load(ctx, root, loadOpts)
 	if err != nil {
@@ -168,9 +185,10 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		defer os.RemoveAll(tmpDir)
 		buildOpts.WorkspaceDir = tmpDir
 	}
-	// TODO: Prepare the matching language build.Target here when implementations
-	// beyond c.NewTarget are added.
-	if crossCompile {
+	var target build.Target
+	// TODO: Add other language build.Target preparation alongside this C case.
+	if useCTarget {
+		targetMatrix := targetArch + "-" + targetOS
 		llvmToolchain, err := llvm.New()
 		if err != nil {
 			return fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
@@ -183,13 +201,13 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 			return err
 		}
 		defer bootstrapTarget.Close()
-		buildOpts.Target = bootstrapTarget
+		target = bootstrapTarget
 
-		if useDefaultSysroot {
+		if targetRoot != (module.Version{}) {
 			// A successful Load includes every Options.Roots path in the selected graph.
 			var selectedSysroot *modules.Module
 			for _, mod := range mods {
-				if mod.Path == sysroot.Path {
+				if mod.Path == targetRoot.Path {
 					selectedSysroot = mod
 					break
 				}
@@ -197,6 +215,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 
 			sysrootOpts := buildOpts
 			sysrootOpts.RunTest = false
+			sysrootOpts.Target = bootstrapTarget
 			sysrootBuilder, err := build.NewBuilder(sysrootOpts)
 			if err != nil {
 				return fmt.Errorf("failed to create sysroot builder: %w", err)
@@ -222,9 +241,10 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 				return err
 			}
 			defer configuredTarget.Close()
-			buildOpts.Target = configuredTarget
+			target = configuredTarget
 		}
 	}
+	buildOpts.Target = target
 	builder, err := build.NewBuilder(buildOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create builder: %w", err)
