@@ -152,7 +152,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		cSysroot, ok := c.Sysroot(targetOS, targetArch)
 		useCTarget = ok
 		_, customLibc := matrix.Require["libc"]
-		if useCTarget && (targetOS != "linux" || !customLibc) && root.Path != cSysroot.Path {
+		if useCTarget && !customLibc && root.Path != cSysroot.Path {
 			targetRoot = cSysroot
 		}
 	}

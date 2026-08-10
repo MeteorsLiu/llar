@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/x/pkgconfig"
@@ -28,6 +29,28 @@ func New(sourceDir, buildDir, installDir string) *AutoTools {
 
 // Source overrides the source directory.
 func (a *AutoTools) Source(dir string) { a.sourceDir = dir }
+
+// Sysroot sets the target system root for compiler, linker, and pkg-config
+// lookups. Both compiler spellings are supplied so the same Formula works for
+// generic and Apple targets.
+func (a *AutoTools) Sysroot(root string) {
+	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
+		appendFlag(key, "--sysroot="+root)
+		appendFlag(key, "-isysroot"+root)
+	}
+	if _, ok := os.LookupEnv("PKG_CONFIG_SYSROOT_DIR"); !ok {
+		os.Setenv("PKG_CONFIG_SYSROOT_DIR", root)
+	}
+	if _, ok := os.LookupEnv("PKG_CONFIG_LIBDIR"); !ok {
+		paths := filepath.SplitList(os.Getenv("PKG_CONFIG_PATH"))
+		paths = append(paths,
+			filepath.Join(root, "usr", "lib64", "pkgconfig"),
+			filepath.Join(root, "usr", "lib", "pkgconfig"),
+			filepath.Join(root, "usr", "share", "pkgconfig"),
+		)
+		os.Setenv("PKG_CONFIG_LIBDIR", strings.Join(paths, string(os.PathListSeparator)))
+	}
+}
 
 // Use configures the process environment so that Autotools, compilers, and
 // pkg-config find a non-system dependency installed at root.

@@ -49,6 +49,16 @@ func (c *CMake) BuildType(name string) { c.buildType = name }
 // Toolchain sets CMAKE_TOOLCHAIN_FILE.
 func (c *CMake) Toolchain(path string) { c.toolchain = path }
 
+// Sysroot sets the target system root for both generic and Apple targets.
+func (c *CMake) Sysroot(root string) {
+	c.Define("CMAKE_SYSROOT", root)
+	c.Define("CMAKE_OSX_SYSROOT", root)
+	c.Define("CMAKE_FIND_ROOT_PATH_MODE_PROGRAM", "NEVER")
+	c.Define("CMAKE_FIND_ROOT_PATH_MODE_LIBRARY", "ONLY")
+	c.Define("CMAKE_FIND_ROOT_PATH_MODE_INCLUDE", "ONLY")
+	c.Define("CMAKE_FIND_ROOT_PATH_MODE_PACKAGE", "ONLY")
+}
+
 // Define adds a -D<key>:STRING=<value> definition.
 func (c *CMake) Define(key, value string) {
 	c.defines[key] = defineValue{value: value, typeName: "STRING"}

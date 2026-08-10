@@ -143,6 +143,25 @@ func TestDefinesArgs(t *testing.T) {
 	}
 }
 
+func TestSysroot(t *testing.T) {
+	c := New("", "", "")
+	c.Sysroot("/sdk")
+
+	joined := strings.Join(c.definesArgs(), " ")
+	for _, want := range []string{
+		"-DCMAKE_SYSROOT:STRING=/sdk",
+		"-DCMAKE_OSX_SYSROOT:STRING=/sdk",
+		"-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM:STRING=NEVER",
+		"-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY:STRING=ONLY",
+		"-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE:STRING=ONLY",
+		"-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE:STRING=ONLY",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("definesArgs missing %q, got %q", want, joined)
+		}
+	}
+}
+
 func TestDefinesArgsEmpty(t *testing.T) {
 	c := New("", "", "")
 	if args := c.definesArgs(); args != nil {

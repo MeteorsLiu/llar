@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -129,6 +130,49 @@ func TestUsePartialDirs(t *testing.T) {
 	}
 	if got := execbroker.Getenv("CMAKE_LIBRARY_PATH"); got != "" {
 		t.Errorf("CMAKE_LIBRARY_PATH = %q, want empty", got)
+	}
+}
+
+func TestSysroot(t *testing.T) {
+	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
+		t.Setenv(key, "-existing")
+	}
+	for _, key := range []string{"PKG_CONFIG_SYSROOT_DIR", "PKG_CONFIG_LIBDIR"} {
+		value, ok := os.LookupEnv(key)
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if ok {
+				_ = os.Setenv(key, value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		})
+	}
+	t.Setenv("PKG_CONFIG_PATH", "/deps/lib/pkgconfig")
+
+	a := New("", "", "")
+	a.Sysroot("/sdk")
+
+	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
+		if got, want := os.Getenv(key), "-existing --sysroot=/sdk -isysroot/sdk"; got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	if got := os.Getenv("PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
+		t.Errorf("PKG_CONFIG_SYSROOT_DIR = %q, want /sdk", got)
+	}
+	libDirs := filepath.SplitList(os.Getenv("PKG_CONFIG_LIBDIR"))
+	for _, want := range []string{
+		"/deps/lib/pkgconfig",
+		filepath.Join("/sdk", "usr", "lib64", "pkgconfig"),
+		filepath.Join("/sdk", "usr", "lib", "pkgconfig"),
+		filepath.Join("/sdk", "usr", "share", "pkgconfig"),
+	} {
+		if !slices.Contains(libDirs, want) {
+			t.Errorf("PKG_CONFIG_LIBDIR = %q, want %q", libDirs, want)
+		}
 	}
 }
 
