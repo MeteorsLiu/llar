@@ -166,6 +166,8 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 	}
 	var sysrootMods []*modules.Module
 	if targetRoot != (module.Version{}) {
+		// The default sysroot has no dependencies, but modules.Load still owns
+		// selecting the Formula whose fromVer applies to targetRoot.Version.
 		sysrootMods, err = modules.Load(ctx, targetRoot, loadOpts)
 		if err != nil {
 			return fmt.Errorf("failed to load sysroot %s@%s: %w", targetRoot.Path, targetRoot.Version, err)
