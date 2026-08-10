@@ -160,12 +160,16 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		FormulaStore: store,
 		Matrix:       matrix,
 	}
-	if targetRoot != (module.Version{}) {
-		loadOpts.Roots = []module.Version{targetRoot}
-	}
 	mods, err := modules.Load(ctx, root, loadOpts)
 	if err != nil {
 		return fmt.Errorf("failed to load modules: %w", err)
+	}
+	var sysrootMods []*modules.Module
+	if targetRoot != (module.Version{}) {
+		sysrootMods, err = modules.Load(ctx, targetRoot, loadOpts)
+		if err != nil {
+			return fmt.Errorf("failed to load sysroot %s@%s: %w", targetRoot.Path, targetRoot.Version, err)
+		}
 	}
 
 	var buildOutput io.Writer = io.Discard
@@ -208,14 +212,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		target = bootstrapTarget
 
 		if targetRoot != (module.Version{}) {
-			// A successful Load includes every Options.Roots path in the selected graph.
-			var selectedSysroot *modules.Module
-			for _, mod := range mods {
-				if mod.Path == targetRoot.Path {
-					selectedSysroot = mod
-					break
-				}
-			}
+			selectedSysroot := sysrootMods[0]
 
 			sysrootOpts := buildOpts
 			sysrootOpts.RunTest = false
@@ -224,11 +221,11 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 			if err != nil {
 				return fmt.Errorf("failed to create sysroot builder: %w", err)
 			}
-			sysrootResults, err := sysrootBuilder.Build(ctx, []*modules.Module{selectedSysroot})
+			sysrootResults, err := sysrootBuilder.Build(ctx, sysrootMods)
 			if err != nil {
 				return fmt.Errorf("failed to build sysroot %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
 			}
-			metadata, err := ccmetadata.Parse(sysrootResults[0].Metadata)
+			metadata, err := ccmetadata.Parse(sysrootResults[len(sysrootResults)-1].Metadata)
 			if err != nil {
 				return fmt.Errorf("failed to parse sysroot metadata for %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
 			}
