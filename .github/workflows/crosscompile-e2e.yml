@@ -87,6 +87,25 @@ jobs:
             --output "$RUNNER_TEMP/zlib-linux-arm64" \
             --verbose
 
+      - name: Link consumer with Bootlin target libc
+        run: |
+          output="$RUNNER_TEMP/zlib-linux-arm64"
+          sysroot="$RUNNER_TEMP/bootlin/aarch64--glibc--stable/aarch64-buildroot-linux-gnu/sysroot"
+          trace="$RUNNER_TEMP/linux-arm64-link.trace"
+          mkdir -p "$output/bin"
+          clang \
+            --target=aarch64-linux-gnu \
+            -fuse-ld=lld \
+            --sysroot="$sysroot" \
+            -I"$output/include" \
+            testdata/crosscompile-e2e/consumer.c \
+            "$output/lib/libz.a" \
+            -Wl,--trace \
+            -o "$output/bin/zlib-consumer" \
+            2>&1 | tee "$trace"
+          grep -F "$sysroot/usr/lib/Scrt1.o" "$trace"
+          grep -F "$sysroot/usr/lib/libc.so" "$trace"
+
       - name: Upload zlib artifact
         uses: actions/upload-artifact@v4
         with:
@@ -109,16 +128,29 @@ jobs:
           name: zlib-linux-arm64
           path: ${{ runner.temp }}/zlib-linux-arm64
 
-      - name: Build and run consumer
+      - name: Inspect and run cross-linked consumer
+        run: |
+          consumer="$RUNNER_TEMP/zlib-linux-arm64/bin/zlib-consumer"
+          test "$(uname -m)" = "aarch64"
+          file "$consumer"
+          readelf --program-headers "$consumer" | tee "$RUNNER_TEMP/program-headers.txt"
+          grep -F "Requesting program interpreter: /lib/ld-linux-aarch64.so.1" "$RUNNER_TEMP/program-headers.txt"
+          readelf --dynamic "$consumer" | tee "$RUNNER_TEMP/dynamic-section.txt"
+          grep -F "Shared library: [libc.so.6]" "$RUNNER_TEMP/dynamic-section.txt"
+          readelf --version-info "$consumer"
+          chmod +x "$consumer"
+          "$consumer"
+
+      - name: Build and run consumer with runner toolchain
         run: |
           test "$(uname -m)" = "aarch64"
           cc \
             -I"$RUNNER_TEMP/zlib-linux-arm64/include" \
             testdata/crosscompile-e2e/consumer.c \
             "$RUNNER_TEMP/zlib-linux-arm64/lib/libz.a" \
-            -o "$RUNNER_TEMP/zlib-consumer"
-          file "$RUNNER_TEMP/zlib-consumer"
-          "$RUNNER_TEMP/zlib-consumer"
+            -o "$RUNNER_TEMP/zlib-consumer-native"
+          file "$RUNNER_TEMP/zlib-consumer-native"
+          "$RUNNER_TEMP/zlib-consumer-native"
 
   build-darwin-arm64:
     name: "Build zlib: Linux arm64 host to Darwin arm64 target"
@@ -188,6 +220,24 @@ jobs:
             --output "$RUNNER_TEMP/zlib-darwin-arm64" \
             --verbose
 
+      - name: Link consumer with macOS 14.5 SDK
+        run: |
+          output="$RUNNER_TEMP/zlib-darwin-arm64"
+          sysroot="$RUNNER_TEMP/macos-sdk/MacOSX14.5.sdk"
+          trace="$RUNNER_TEMP/darwin-arm64-link.trace"
+          mkdir -p "$output/bin"
+          clang \
+            --target=arm64-apple-macos11.0 \
+            -fuse-ld=lld \
+            -isysroot "$sysroot" \
+            -I"$output/include" \
+            testdata/crosscompile-e2e/consumer.c \
+            "$output/lib/libz.a" \
+            -Wl,-t \
+            -o "$output/bin/zlib-consumer" \
+            2>&1 | tee "$trace"
+          grep -F "$sysroot/usr/lib/libSystem.tbd" "$trace"
+
       - name: Upload zlib artifact
         uses: actions/upload-artifact@v4
         with:
@@ -210,13 +260,25 @@ jobs:
           name: zlib-darwin-arm64
           path: ${{ runner.temp }}/zlib-darwin-arm64
 
-      - name: Build and run consumer
+      - name: Inspect and run cross-linked consumer
+        run: |
+          consumer="$RUNNER_TEMP/zlib-darwin-arm64/bin/zlib-consumer"
+          test "$(uname -m)" = "arm64"
+          file "$consumer"
+          otool -L "$consumer" | tee "$RUNNER_TEMP/load-commands.txt"
+          grep -F "/usr/lib/libSystem.B.dylib" "$RUNNER_TEMP/load-commands.txt"
+          otool -l "$consumer" | sed -n '/cmd LC_BUILD_VERSION/,+5p' | tee "$RUNNER_TEMP/build-version.txt"
+          grep -E "sdk +14\\.5" "$RUNNER_TEMP/build-version.txt"
+          chmod +x "$consumer"
+          "$consumer"
+
+      - name: Build and run consumer with runner toolchain
         run: |
           test "$(uname -m)" = "arm64"
           cc \
             -I"$RUNNER_TEMP/zlib-darwin-arm64/include" \
             testdata/crosscompile-e2e/consumer.c \
             "$RUNNER_TEMP/zlib-darwin-arm64/lib/libz.a" \
-            -o "$RUNNER_TEMP/zlib-consumer"
-          file "$RUNNER_TEMP/zlib-consumer"
-          "$RUNNER_TEMP/zlib-consumer"
+            -o "$RUNNER_TEMP/zlib-consumer-native"
+          file "$RUNNER_TEMP/zlib-consumer-native"
+          "$RUNNER_TEMP/zlib-consumer-native"
