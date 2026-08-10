@@ -189,13 +189,13 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 	// TODO: Add other language build.Target preparation alongside this C case.
 	if useCTarget {
 		targetMatrix := targetArch + "-" + targetOS
-		llvmToolchain, err := llvm.New()
+		bootstrapToolchain, err := llvm.New(llvm.Config{OS: targetOS, Arch: targetArch})
 		if err != nil {
 			return fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
 		}
 		bootstrapTarget, err := c.NewTarget(c.Config{
 			Matrix:    targetMatrix,
-			Toolchain: llvmToolchain.Toolchain,
+			Toolchain: bootstrapToolchain.Toolchain,
 		})
 		if err != nil {
 			return err
@@ -232,9 +232,13 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 				return fmt.Errorf("sysroot metadata for %s@%s has no sysroot", selectedSysroot.Path, selectedSysroot.Version)
 			}
 
+			configuredToolchain, err := llvm.New(llvm.Config{OS: targetOS, Arch: targetArch, Sysroot: metadata.Sysroot()})
+			if err != nil {
+				return fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
+			}
 			configuredTarget, err := c.NewTarget(c.Config{
 				Matrix:    targetMatrix,
-				Toolchain: llvmToolchain.Toolchain,
+				Toolchain: configuredToolchain.Toolchain,
 				Sysroot:   metadata.Sysroot(),
 			})
 			if err != nil {

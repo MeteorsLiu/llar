@@ -12,10 +12,18 @@ import (
 	"github.com/goplus/llar/mod/module"
 )
 
-func fakeToolchain() Toolchain {
+func fakeToolchain(t *testing.T, targetOS string, compilerArgs ...string) Toolchain {
+	t.Helper()
+	cc := append([]string{"/llvm/bin/clang"}, compilerArgs...)
+	cxx := append([]string{"/llvm/bin/clang++"}, compilerArgs...)
+	linker := "/llvm/bin/ld.lld"
+	if targetOS == "darwin" {
+		linker = "/llvm/bin/ld64.lld"
+	}
 	return NewToolchain(
-		"/llvm/bin/clang",
-		"/llvm/bin/clang++",
+		cc,
+		cxx,
+		[]string{linker},
 		"/llvm/bin/llvm-ar",
 		"/llvm/bin/llvm-ranlib",
 		"/llvm/bin/llvm-nm",
@@ -44,28 +52,30 @@ func TestSysroot(t *testing.T) {
 }
 
 func TestDarwinTarget(t *testing.T) {
-	target, err := NewTarget(Config{Matrix: "amd64-darwin|shared", Toolchain: fakeToolchain(), Sysroot: "/sdk"})
+	toolchain := fakeToolchain(t, "darwin", "--target=x86_64-apple-macos10.13", "-fuse-ld=lld", "-isysroot/sdk")
+	target, err := NewTarget(Config{Matrix: "amd64-darwin|shared", Toolchain: toolchain, Sysroot: "/sdk"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = target.Close() })
 
 	patch := target.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c"}})
-	want := []string{"--target=x86_64-apple-darwin", "-isysroot/sdk", "-mmacosx-version-min=10.13"}
+	want := []string{"--target=x86_64-apple-macos10.13", "-fuse-ld=lld", "-isysroot/sdk"}
 	if !reflect.DeepEqual(patch.PrependArg, want) {
 		t.Fatalf("PrependArg = %q, want %q", patch.PrependArg, want)
 	}
 	patch = target.Use(build.Command{Name: "cc", Args: []string{"a.o", "-shared"}})
-	if !slices.Contains(patch.PrependArg, "-fuse-ld=lld") {
-		t.Fatalf("link PrependArg = %q, want LLD selection", patch.PrependArg)
+	if !reflect.DeepEqual(patch.PrependArg, want) {
+		t.Fatalf("link PrependArg = %q, want %q", patch.PrependArg, want)
 	}
 
 	patch = target.Use(build.Command{
 		Name: "cc",
-		Args: []string{"--target=custom", "-isysroot/custom", "-mmacosx-version-min=12.0", "-fuse-ld=custom"},
+		Args: []string{"--target=custom", "-isysroot/custom", "-fuse-ld=custom"},
 	})
-	if len(patch.PrependArg) != 0 {
-		t.Fatalf("explicit Darwin flags were duplicated: %q", patch.PrependArg)
+	want = []string{"--target=x86_64-apple-macos10.13", "-fuse-ld=lld", "-isysroot/sdk"}
+	if !reflect.DeepEqual(patch.PrependArg, want) {
+		t.Fatalf("PrependArg = %q, want prepared defaults %q", patch.PrependArg, want)
 	}
 
 	patch = target.Use(build.Command{Name: "/src/configure"})
@@ -73,9 +83,8 @@ func TestDarwinTarget(t *testing.T) {
 		t.Fatalf("configure AppendArg = %q, want %q", got, want)
 	}
 	for key, values := range map[string][]string{
-		"CFLAGS":   {"--target=x86_64-apple-darwin", "-isysroot/sdk", "-mmacosx-version-min=10.13"},
-		"CPPFLAGS": {"-isysroot/sdk"},
-		"LDFLAGS":  {"--target=x86_64-apple-darwin", "-isysroot/sdk", "-mmacosx-version-min=10.13", "-fuse-ld=lld"},
+		"CC": {"/llvm/bin/clang", "--target=x86_64-apple-macos10.13", "-fuse-ld=lld", "-isysroot/sdk"},
+		"LD": {"/llvm/bin/ld64.lld"},
 	} {
 		got, _ := envValue(patch.Env, key)
 		for _, value := range values {
@@ -95,8 +104,9 @@ func TestDarwinTarget(t *testing.T) {
 		"set(CMAKE_SYSTEM_NAME \"Darwin\")",
 		"CMAKE_OSX_ARCHITECTURES",
 		"CMAKE_OSX_SYSROOT",
-		"CMAKE_OSX_DEPLOYMENT_TARGET",
-		"x86_64-apple-darwin",
+		"CMAKE_LINKER",
+		"/llvm/bin/ld64.lld",
+		"x86_64-apple-macos10.13",
 		"-fuse-ld=lld",
 	} {
 		if !strings.Contains(content, want) {
@@ -105,28 +115,29 @@ func TestDarwinTarget(t *testing.T) {
 	}
 }
 
-func TestDarwinArm64DeploymentTarget(t *testing.T) {
-	target, err := NewTarget(Config{Matrix: "arm64-darwin", Toolchain: fakeToolchain(), Sysroot: "/sdk"})
+func TestDarwinArm64Compiler(t *testing.T) {
+	toolchain := fakeToolchain(t, "darwin", "--target=arm64-apple-macos11.0", "-fuse-ld=lld", "-isysroot/sdk")
+	target, err := NewTarget(Config{Matrix: "arm64-darwin", Toolchain: toolchain, Sysroot: "/sdk"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = target.Close() })
 
 	patch := target.Use(build.Command{Name: "cc"})
-	if !slices.Contains(patch.PrependArg, "-mmacosx-version-min=11.0") {
-		t.Fatalf("PrependArg = %q, want arm64 deployment target", patch.PrependArg)
+	if !slices.Contains(patch.PrependArg, "--target=arm64-apple-macos11.0") {
+		t.Fatalf("PrependArg = %q, want prepared arm64 compiler target", patch.PrependArg)
 	}
 }
 
 func TestBootstrapTargetOmitsSysroot(t *testing.T) {
-	c, err := NewTarget(Config{Matrix: "arm64-linux", Toolchain: fakeToolchain()})
+	c, err := NewTarget(Config{Matrix: "arm64-linux", Toolchain: fakeToolchain(t, "linux", "--target=aarch64-linux-gnu", "-fuse-ld=lld")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
 
 	patch := c.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c"}})
-	if got, want := patch.PrependArg, []string{"--target=aarch64-linux-gnu"}; !reflect.DeepEqual(got, want) {
+	if got, want := patch.PrependArg, []string{"--target=aarch64-linux-gnu", "-fuse-ld=lld"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("PrependArg = %q, want %q", got, want)
 	}
 	if patch := c.Use(build.Command{Name: "pkg-config"}); patch.Env != nil {
@@ -156,7 +167,7 @@ func TestUseCMakeWritesToolchainLazily(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{"CMAKE_SYSTEM_NAME", "aarch64", "/llvm/bin/clang", "aarch64-linux-gnu", "/sdk"} {
+	for _, want := range []string{"CMAKE_SYSTEM_NAME", "CMAKE_LINKER", "aarch64", "/llvm/bin/clang", "/llvm/bin/ld.lld", "aarch64-linux-gnu", "/sdk", "-fuse-ld=lld"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("toolchain file does not contain %q:\n%s", want, content)
 		}
@@ -191,16 +202,24 @@ func TestUseDirectCommands(t *testing.T) {
 	if patch.Name != "/llvm/bin/clang" {
 		t.Fatalf("Name = %q", patch.Name)
 	}
-	want := []string{"--target=aarch64-linux-gnu", "--sysroot=/sdk"}
+	want := []string{"--target=aarch64-linux-gnu", "-fuse-ld=lld", "--sysroot=/sdk"}
 	if !reflect.DeepEqual(patch.PrependArg, want) {
 		t.Fatalf("PrependArg = %q, want %q", patch.PrependArg, want)
 	}
-	patch = c.Use(build.Command{Name: "cc", Args: []string{"--target=custom", "--sysroot=/custom"}})
-	if len(patch.PrependArg) != 0 {
-		t.Fatalf("explicit compiler flags were duplicated: %q", patch.PrependArg)
+	patch = c.Use(build.Command{Name: "cc", Args: []string{"a.o", "-o", "a"}})
+	if !reflect.DeepEqual(patch.PrependArg, want) {
+		t.Fatalf("link PrependArg = %q, want %q", patch.PrependArg, want)
+	}
+	patch = c.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c", "--target=custom", "--sysroot=/custom"}})
+	if !reflect.DeepEqual(patch.PrependArg, want) {
+		t.Fatalf("PrependArg = %q, want prepared defaults %q", patch.PrependArg, want)
 	}
 	if patch := c.Use(build.Command{Name: filepath.Join("custom", "cc")}); patch.Name != "" {
 		t.Fatalf("explicit compiler path was rewritten: %+v", patch)
+	}
+	patch = c.Use(build.Command{Name: "ld"})
+	if patch.Name != "/llvm/bin/ld.lld" {
+		t.Fatalf("linker Name = %q, want /llvm/bin/ld.lld", patch.Name)
 	}
 }
 
@@ -214,8 +233,11 @@ func TestUseAutotools(t *testing.T) {
 	if got, _ := envValue(patch.Env, "CC"); got != "/custom/cc" {
 		t.Fatalf("CC override = %q, want /custom/cc", got)
 	}
-	if got, _ := envValue(patch.Env, "CFLAGS"); got != "-O2 --target=custom --sysroot=/sdk" {
+	if got, _ := envValue(patch.Env, "CFLAGS"); got != "-O2 --target=custom" {
 		t.Fatalf("CFLAGS = %q", got)
+	}
+	if got, _ := envValue(patch.Env, "LD"); got != "/llvm/bin/ld.lld" {
+		t.Fatalf("LD = %q, want /llvm/bin/ld.lld", got)
 	}
 	if got, want := patch.AppendArg, []string{"--host=aarch64-linux-gnu"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
@@ -230,7 +252,7 @@ func TestUsePkgConfig(t *testing.T) {
 		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q", got)
 	}
 	got, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR")
-	for _, want := range []string{"/deps/a/lib/pkgconfig", "/deps/b/lib/pkgconfig", filepath.Join("/sdk", "usr", "lib", "aarch64-linux-gnu", "pkgconfig")} {
+	for _, want := range []string{"/deps/a/lib/pkgconfig", "/deps/b/lib/pkgconfig", filepath.Join("/sdk", "usr", "lib", "pkgconfig")} {
 		if !slices.Contains(filepath.SplitList(got), want) {
 			t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", got, want)
 		}
@@ -243,7 +265,8 @@ func TestUsePkgConfig(t *testing.T) {
 
 func newTestTarget(t *testing.T) *Target {
 	t.Helper()
-	c, err := NewTarget(Config{Matrix: "arm64-linux|shared", Toolchain: fakeToolchain(), Sysroot: "/sdk"})
+	toolchain := fakeToolchain(t, "linux", "--target=aarch64-linux-gnu", "-fuse-ld=lld", "--sysroot=/sdk")
+	c, err := NewTarget(Config{Matrix: "arm64-linux|shared", Toolchain: toolchain, Sysroot: "/sdk"})
 	if err != nil {
 		t.Fatal(err)
 	}

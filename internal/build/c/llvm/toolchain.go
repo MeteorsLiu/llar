@@ -12,8 +12,32 @@ type Toolchain struct {
 	c.Toolchain
 }
 
+// Config contains the target facts required to prepare LLVM commands.
+type Config struct {
+	OS      string
+	Arch    string
+	Sysroot string
+}
+
 // New prepares an LLVM Toolchain from commands available in PATH.
-func New() (*Toolchain, error) {
+func New(config Config) (*Toolchain, error) {
+	var triple, linkerName string
+	switch config.Arch + "-" + config.OS {
+	case "amd64-linux":
+		triple = "x86_64-linux-gnu"
+		linkerName = "ld.lld"
+	case "arm64-linux":
+		triple = "aarch64-linux-gnu"
+		linkerName = "ld.lld"
+	case "amd64-darwin":
+		triple = "x86_64-apple-macos10.13"
+		linkerName = "ld64.lld"
+	case "arm64-darwin":
+		triple = "arm64-apple-macos11.0"
+		linkerName = "ld64.lld"
+	default:
+		return nil, fmt.Errorf("unsupported LLVM target %s/%s", config.OS, config.Arch)
+	}
 	find := func(name string) (string, error) {
 		path, err := exec.LookPath(name)
 		if err != nil {
@@ -21,11 +45,15 @@ func New() (*Toolchain, error) {
 		}
 		return path, nil
 	}
-	cc, err := find("clang")
+	ccPath, err := find("clang")
 	if err != nil {
 		return nil, err
 	}
-	cxx, err := find("clang++")
+	cxxPath, err := find("clang++")
+	if err != nil {
+		return nil, err
+	}
+	linker, err := find(linkerName)
 	if err != nil {
 		return nil, err
 	}
@@ -45,5 +73,16 @@ func New() (*Toolchain, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Toolchain{Toolchain: c.NewToolchain(cc, cxx, archiver, ranlib, nm, strip)}, nil
+	cc := []string{ccPath, "--target=" + triple, "-fuse-ld=lld"}
+	cxx := []string{cxxPath, "--target=" + triple, "-fuse-ld=lld"}
+	if config.Sysroot != "" {
+		flag := "--sysroot=" + config.Sysroot
+		if config.OS == "darwin" {
+			flag = "-isysroot" + config.Sysroot
+		}
+		cc = append(cc, flag)
+		cxx = append(cxx, flag)
+	}
+	toolchain := c.NewToolchain(cc, cxx, []string{linker}, archiver, ranlib, nm, strip)
+	return &Toolchain{Toolchain: toolchain}, nil
 }
