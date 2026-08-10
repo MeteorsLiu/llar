@@ -168,6 +168,8 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		defer os.RemoveAll(tmpDir)
 		buildOpts.WorkspaceDir = tmpDir
 	}
+	// TODO: Prepare the matching language build.Target here when implementations
+	// beyond c.NewTarget are added.
 	if crossCompile {
 		llvmToolchain, err := llvm.New()
 		if err != nil {

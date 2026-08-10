@@ -13,6 +13,8 @@ func crossCompileTarget(matrix formula.Matrix) (string, bool) {
 	if targetOS == runtime.GOOS && targetArch == runtime.GOARCH {
 		return "", false
 	}
+	// TODO: Select support across language implementations when another
+	// build.Target is added; c.Sysroot currently defines the supported set.
 	if _, ok := c.Sysroot(targetOS, targetArch); !ok {
 		return "", false
 	}
@@ -27,6 +29,8 @@ func crossCompileSysroot(
 		return module.Version{}, false
 	}
 	targetOS, targetArch := matrixTarget(matrix)
+	// TODO: Add language-specific bootstrap inputs alongside this C sysroot
+	// policy when another build.Target requires its own preparation.
 	sysroot, ok := c.Sysroot(targetOS, targetArch)
 	if !ok || targetOS == runtime.GOOS && targetArch == runtime.GOARCH || root.Path == sysroot.Path {
 		return module.Version{}, false
