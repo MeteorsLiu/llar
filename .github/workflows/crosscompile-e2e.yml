@@ -143,8 +143,8 @@ jobs:
           "$RUNNER_TEMP/zlib-consumer-native"
 
   build-darwin-arm64:
-    name: "Build zlib: Linux arm64 host to Darwin arm64 target"
-    runs-on: ubuntu-24.04-arm
+    name: "Build zlib: Linux amd64 host to Darwin arm64 target"
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Check out code
