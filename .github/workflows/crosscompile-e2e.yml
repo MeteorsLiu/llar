@@ -24,41 +24,29 @@ jobs:
         with:
           go-version: 1.24.x
 
-      - name: Install LLVM and the arm64 runtime
+      - name: Install LLVM
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 lld-18 llvm-18 gcc-aarch64-linux-gnu rpm2cpio cpio
+          sudo apt-get install --yes clang-18 lld-18 llvm-18
           echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
 
-      - name: Prepare glibc 2.17 arm64 sysroot
+      - name: Prepare Bootlin glibc 2.24 arm64 sysroot
         run: |
-          package_dir="$RUNNER_TEMP/glibc-packages"
-          sysroot_dir="$RUNNER_TEMP/glibc-sysroot"
-          base_url="https://vault.centos.org/altarch/7.9.2009/os/aarch64/Packages"
-          mkdir -p "$package_dir" "$sysroot_dir"
+          archive="$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2"
+          toolchain_root="$RUNNER_TEMP/bootlin"
+          curl --fail --location --retry 3 \
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2" \
+            --output "$archive"
+          echo "530137589c4588599ebd115c12630c75e79c935ac4f34b0941404036f5e25026  $archive" | sha256sum --check
+          mkdir -p "$toolchain_root"
+          tar -xjf "$archive" -C "$toolchain_root"
 
-          for package in \
-            glibc-2.17-317.el7.aarch64.rpm \
-            glibc-devel-2.17-317.el7.aarch64.rpm \
-            glibc-headers-2.17-317.el7.aarch64.rpm \
-            kernel-headers-4.18.0-193.28.1.el7.aarch64.rpm
-          do
-            curl --fail --location --retry 3 \
-              "$base_url/$package" \
-              --output "$package_dir/$package"
-          done
-
-          cd "$package_dir"
-          sha256sum --check <<'EOF'
-          ca1976545bcd4a6c099f1b3e2505469083b6bb4901d2517275a8da4138c0b21a  glibc-2.17-317.el7.aarch64.rpm
-          458738f7b415fb73473725b6bef340234954e4eb00731cbf8aa1afad5ccd12f6  glibc-devel-2.17-317.el7.aarch64.rpm
-          58a5802d026435b36d7080ea4943868a82fc41642a2b0e475239bd6aaa5882cd  glibc-headers-2.17-317.el7.aarch64.rpm
-          56fffc40800cd7c30830009c860f04c8dba1110a6271efd804a0bb01e0bdf8a4  kernel-headers-4.18.0-193.28.1.el7.aarch64.rpm
-          EOF
-          for package in *.rpm; do
-            rpm2cpio "$package" | (cd "$sysroot_dir" && cpio -idm --quiet)
-          done
-          echo "LLAR_E2E_SYSROOT=$sysroot_dir" >> "$GITHUB_ENV"
+          root="$toolchain_root/aarch64--glibc--stable"
+          sysroot="$root/aarch64-buildroot-linux-gnu/sysroot"
+          gcc_runtime="$root/lib/gcc/aarch64-buildroot-linux-gnu/5.4.0"
+          # Clang receives only the sysroot path, so install Bootlin's target
+          # runtime, for example crtbeginS.o and libgcc.a, into its library path.
+          cp -a "$gcc_runtime/." "$sysroot/usr/lib/"
 
       - name: Prepare formula and source repositories
         run: |
@@ -75,13 +63,15 @@ jobs:
           git -C "$formula_repo" commit --quiet -m "Cross compile E2E formulas"
 
           cp testdata/crosscompile-e2e/install-sysroot "$source_repo/"
+          tar -cJf "$source_repo/sysroot.tar.xz" \
+            -C "$RUNNER_TEMP/bootlin/aarch64--glibc--stable/aarch64-buildroot-linux-gnu/sysroot" .
           chmod +x "$source_repo/install-sysroot"
           git -C "$source_repo" init --initial-branch=main
           git -C "$source_repo" config user.email crosscompile-e2e@example.com
           git -C "$source_repo" config user.name "Cross Compile E2E"
           git -C "$source_repo" add .
           git -C "$source_repo" commit --quiet -m "Add sysroot installer"
-          git -C "$source_repo" tag glibc-2.17
+          git -C "$source_repo" tag glibc-2.24
 
           git config --global protocol.file.allow always
           git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
@@ -156,7 +146,6 @@ jobs:
           echo "6e146275d19f027faa2e8354da5e0267513abf013b8f16ad65a231653a2b1c5d  $archive" | sha256sum --check
           mkdir -p "$sdk_root"
           tar -xJf "$archive" -C "$sdk_root"
-          echo "LLAR_E2E_SYSROOT=$sdk_root/MacOSX14.5.sdk" >> "$GITHUB_ENV"
 
       - name: Prepare formula and source repositories
         run: |
@@ -173,6 +162,8 @@ jobs:
           git -C "$formula_repo" commit --quiet -m "Cross compile E2E formulas"
 
           cp testdata/crosscompile-e2e/install-sysroot "$source_repo/"
+          tar -cJf "$source_repo/sysroot.tar.xz" \
+            -C "$RUNNER_TEMP/macos-sdk/MacOSX14.5.sdk" .
           chmod +x "$source_repo/install-sysroot"
           git -C "$source_repo" init --initial-branch=main
           git -C "$source_repo" config user.email crosscompile-e2e@example.com

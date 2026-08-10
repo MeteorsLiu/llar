@@ -1,5 +1,5 @@
 #!/bin/sh
 set -eu
 
-: "${LLAR_E2E_SYSROOT:?LLAR_E2E_SYSROOT is required}"
-cp -a "$LLAR_E2E_SYSROOT/." "$1/"
+source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+tar -xJf "$source_dir/sysroot.tar.xz" -C "$1"

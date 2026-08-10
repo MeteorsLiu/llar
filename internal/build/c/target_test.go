@@ -32,7 +32,7 @@ func fakeToolchain(t *testing.T, targetOS string, compilerArgs ...string) Toolch
 }
 
 func TestSysroot(t *testing.T) {
-	linux := module.Version{Path: "bminor/glibc", Version: "glibc-2.17"}
+	linux := module.Version{Path: "bminor/glibc", Version: "glibc-2.24"}
 	darwin := module.Version{Path: "joseluisq/macosx-sdks", Version: "14.5"}
 	for _, arch := range []string{"amd64", "arm64"} {
 		got, ok := Sysroot("linux", arch)

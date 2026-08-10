@@ -1,6 +1,6 @@
 id "bminor/glibc"
 
-fromVer "glibc-2.17"
+fromVer "glibc-2.24"
 
 onBuild ctx => {
 	exec! "./install-sysroot", ctx.outputDir
