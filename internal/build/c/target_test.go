@@ -24,17 +24,97 @@ func fakeToolchain() Toolchain {
 }
 
 func TestSysroot(t *testing.T) {
-	want := module.Version{Path: "bminor/glibc", Version: "glibc-2.17"}
+	linux := module.Version{Path: "bminor/glibc", Version: "glibc-2.17"}
+	darwin := module.Version{Path: "joseluisq/macosx-sdks", Version: "14.5"}
 	for _, arch := range []string{"amd64", "arm64"} {
 		got, ok := Sysroot("linux", arch)
-		if !ok || got != want {
-			t.Fatalf("Sysroot(linux, %s) = %+v, %v; want %+v, true", arch, got, ok, want)
+		if !ok || got != linux {
+			t.Fatalf("Sysroot(linux, %s) = %+v, %v; want %+v, true", arch, got, ok, linux)
+		}
+		got, ok = Sysroot("darwin", arch)
+		if !ok || got != darwin {
+			t.Fatalf("Sysroot(darwin, %s) = %+v, %v; want %+v, true", arch, got, ok, darwin)
 		}
 	}
-	for _, target := range [][2]string{{"darwin", "arm64"}, {"linux", "riscv64"}, {"", "esp32"}} {
+	for _, target := range [][2]string{{"darwin", "riscv64"}, {"linux", "riscv64"}, {"", "esp32"}} {
 		if got, ok := Sysroot(target[0], target[1]); ok {
 			t.Fatalf("Sysroot(%q, %q) = %+v, true; want unsupported", target[0], target[1], got)
 		}
+	}
+}
+
+func TestDarwinTarget(t *testing.T) {
+	target, err := NewTarget(Config{Matrix: "amd64-darwin|shared", Toolchain: fakeToolchain(), Sysroot: "/sdk"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = target.Close() })
+
+	patch := target.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c"}})
+	want := []string{"--target=x86_64-apple-darwin", "-isysroot/sdk", "-mmacosx-version-min=10.13"}
+	if !reflect.DeepEqual(patch.PrependArg, want) {
+		t.Fatalf("PrependArg = %q, want %q", patch.PrependArg, want)
+	}
+	patch = target.Use(build.Command{Name: "cc", Args: []string{"a.o", "-shared"}})
+	if !slices.Contains(patch.PrependArg, "-fuse-ld=lld") {
+		t.Fatalf("link PrependArg = %q, want LLD selection", patch.PrependArg)
+	}
+
+	patch = target.Use(build.Command{
+		Name: "cc",
+		Args: []string{"--target=custom", "-isysroot/custom", "-mmacosx-version-min=12.0", "-fuse-ld=custom"},
+	})
+	if len(patch.PrependArg) != 0 {
+		t.Fatalf("explicit Darwin flags were duplicated: %q", patch.PrependArg)
+	}
+
+	patch = target.Use(build.Command{Name: "/src/configure"})
+	if got, want := patch.AppendArg, []string{"--host=x86_64-apple-darwin"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("configure AppendArg = %q, want %q", got, want)
+	}
+	for key, values := range map[string][]string{
+		"CFLAGS":   {"--target=x86_64-apple-darwin", "-isysroot/sdk", "-mmacosx-version-min=10.13"},
+		"CPPFLAGS": {"-isysroot/sdk"},
+		"LDFLAGS":  {"--target=x86_64-apple-darwin", "-isysroot/sdk", "-mmacosx-version-min=10.13", "-fuse-ld=lld"},
+	} {
+		got, _ := envValue(patch.Env, key)
+		for _, value := range values {
+			if !slices.Contains(strings.Fields(got), value) {
+				t.Fatalf("%s = %q, want %q", key, got, value)
+			}
+		}
+	}
+
+	patch = target.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	data, err := os.ReadFile(strings.TrimPrefix(patch.AppendArg[0], "-DCMAKE_TOOLCHAIN_FILE:FILEPATH="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"set(CMAKE_SYSTEM_NAME \"Darwin\")",
+		"CMAKE_OSX_ARCHITECTURES",
+		"CMAKE_OSX_SYSROOT",
+		"CMAKE_OSX_DEPLOYMENT_TARGET",
+		"x86_64-apple-darwin",
+		"-fuse-ld=lld",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("toolchain file does not contain %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestDarwinArm64DeploymentTarget(t *testing.T) {
+	target, err := NewTarget(Config{Matrix: "arm64-darwin", Toolchain: fakeToolchain(), Sysroot: "/sdk"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = target.Close() })
+
+	patch := target.Use(build.Command{Name: "cc"})
+	if !slices.Contains(patch.PrependArg, "-mmacosx-version-min=11.0") {
+		t.Fatalf("PrependArg = %q, want arm64 deployment target", patch.PrependArg)
 	}
 }
 

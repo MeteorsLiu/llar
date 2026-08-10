@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	linuxSysrootPath    = "bminor/glibc"
-	linuxSysrootVersion = "glibc-2.17"
+	linuxSysrootPath     = "bminor/glibc"
+	linuxSysrootVersion  = "glibc-2.17"
+	darwinSysrootPath    = "joseluisq/macosx-sdks"
+	darwinSysrootVersion = "14.5"
 )
 
 // Config contains the facts required to prepare a C target.
@@ -24,27 +26,33 @@ type Config struct {
 
 // Target contains prepared C command defaults for one build target.
 type Target struct {
-	target          string
-	systemProcessor string
-	targetTriple    string
-	sysroot         string
-	toolchain       Toolchain
-	toolchainFile   string
-	tempDir         string
+	target           string
+	systemName       string
+	systemProcessor  string
+	targetTriple     string
+	deploymentTarget string
+	sysroot          string
+	toolchain        Toolchain
+	toolchainFile    string
+	tempDir          string
 }
 
-// Sysroot returns the fixed compatibility sysroot Formula for a built-in
-// Linux target.
+// Sysroot returns the fixed compatibility sysroot Formula for a built-in C
+// target.
 func Sysroot(targetOS, targetArch string) (module.Version, bool) {
-	if targetOS != "linux" {
-		return module.Version{}, false
+	switch targetOS {
+	case "linux":
+		switch targetArch {
+		case "amd64", "arm64":
+			return module.Version{Path: linuxSysrootPath, Version: linuxSysrootVersion}, true
+		}
+	case "darwin":
+		switch targetArch {
+		case "amd64", "arm64":
+			return module.Version{Path: darwinSysrootPath, Version: darwinSysrootVersion}, true
+		}
 	}
-	switch targetArch {
-	case "amd64", "arm64":
-		return module.Version{Path: linuxSysrootPath, Version: linuxSysrootVersion}, true
-	default:
-		return module.Version{}, false
-	}
+	return module.Version{}, false
 }
 
 // NewTarget prepares C command defaults from config.
@@ -53,20 +61,41 @@ func NewTarget(config Config) (*Target, error) {
 	if value, _, ok := strings.Cut(config.Matrix, "|"); ok {
 		target = value
 	}
-	triple, processor, err := linuxTarget(target)
-	if err != nil {
-		return nil, err
+	var systemName, processor, triple, deploymentTarget string
+	switch target {
+	case "amd64-linux":
+		systemName = "Linux"
+		processor = "x86_64"
+		triple = "x86_64-linux-gnu"
+	case "arm64-linux":
+		systemName = "Linux"
+		processor = "aarch64"
+		triple = "aarch64-linux-gnu"
+	case "amd64-darwin":
+		systemName = "Darwin"
+		processor = "x86_64"
+		triple = "x86_64-apple-darwin"
+		deploymentTarget = "10.13"
+	case "arm64-darwin":
+		systemName = "Darwin"
+		processor = "arm64"
+		triple = "arm64-apple-darwin"
+		deploymentTarget = "11.0"
+	default:
+		return nil, fmt.Errorf("unsupported C target %s", target)
 	}
 	if err := validateToolchain(config.Toolchain); err != nil {
 		return nil, fmt.Errorf("prepare C target %s: %w", target, err)
 	}
 
 	return &Target{
-		target:          target,
-		systemProcessor: processor,
-		targetTriple:    triple,
-		sysroot:         config.Sysroot,
-		toolchain:       config.Toolchain,
+		target:           target,
+		systemName:       systemName,
+		systemProcessor:  processor,
+		targetTriple:     triple,
+		deploymentTarget: deploymentTarget,
+		sysroot:          config.Sysroot,
+		toolchain:        config.Toolchain,
 	}, nil
 }
 
@@ -126,8 +155,33 @@ func (c *Target) Use(cmd build.Command) build.Patch {
 }
 
 func (c *Target) compilerPatch(name string, args []string) build.Patch {
-	flags := missingCompilerFlags(args, c.targetTriple, c.sysroot)
+	linker := true
+	for _, arg := range args {
+		switch arg {
+		case "-c", "-E", "-S":
+			linker = false
+		}
+	}
+	flags := missingCompilerFlags(args, c.compilerFlags(linker))
 	return build.Patch{Name: name, PrependArg: flags}
+}
+
+func (c *Target) compilerFlags(linker bool) []string {
+	flags := []string{"--target=" + c.targetTriple}
+	if c.sysroot != "" {
+		if c.systemName == "Darwin" {
+			flags = append(flags, "-isysroot"+c.sysroot)
+		} else {
+			flags = append(flags, "--sysroot="+c.sysroot)
+		}
+	}
+	if c.deploymentTarget != "" {
+		flags = append(flags, "-mmacosx-version-min="+c.deploymentTarget)
+	}
+	if linker && c.systemName == "Darwin" {
+		flags = append(flags, "-fuse-ld=lld")
+	}
+	return flags
 }
 
 func (c *Target) autotoolsPatch(cmd build.Command) build.Patch {
@@ -139,16 +193,17 @@ func (c *Target) autotoolsPatch(cmd build.Command) build.Patch {
 	env = setMissingEnv(env, "NM", c.toolchain.NM())
 	env = setMissingEnv(env, "STRIP", c.toolchain.Strip())
 
-	compilerFlags := []string{"--target=" + c.targetTriple}
-	if c.sysroot != "" {
-		compilerFlags = append(compilerFlags, "--sysroot="+c.sysroot)
-	}
+	compilerFlags := c.compilerFlags(false)
 	env = setEnvFlags(env, "CFLAGS", compilerFlags)
 	env = setEnvFlags(env, "CXXFLAGS", compilerFlags)
 	if c.sysroot != "" {
-		env = setEnvFlags(env, "CPPFLAGS", []string{"--sysroot=" + c.sysroot})
+		sysrootFlag := "--sysroot=" + c.sysroot
+		if c.systemName == "Darwin" {
+			sysrootFlag = "-isysroot" + c.sysroot
+		}
+		env = setEnvFlags(env, "CPPFLAGS", []string{sysrootFlag})
 	}
-	env = setEnvFlags(env, "LDFLAGS", compilerFlags)
+	env = setEnvFlags(env, "LDFLAGS", c.compilerFlags(true))
 
 	var args []string
 	if !hasOption(cmd.Args, "--host") {
@@ -165,8 +220,10 @@ func (c *Target) pkgConfigPatch(commandEnv []string) build.Patch {
 	env = setMissingEnv(env, "PKG_CONFIG_SYSROOT_DIR", c.sysroot)
 	libDirs, _ := envValue(env, "PKG_CONFIG_PATH")
 	paths := filepath.SplitList(libDirs)
+	if c.systemName == "Linux" {
+		paths = append(paths, filepath.Join(c.sysroot, "usr", "lib", c.targetTriple, "pkgconfig"))
+	}
 	paths = append(paths,
-		filepath.Join(c.sysroot, "usr", "lib", c.targetTriple, "pkgconfig"),
 		filepath.Join(c.sysroot, "usr", "lib64", "pkgconfig"),
 		filepath.Join(c.sysroot, "usr", "lib", "pkgconfig"),
 		filepath.Join(c.sysroot, "usr", "share", "pkgconfig"),
@@ -177,10 +234,18 @@ func (c *Target) pkgConfigPatch(commandEnv []string) build.Patch {
 
 func (c *Target) cmakeToolchain() string {
 	values := [][2]string{
-		{"CMAKE_SYSTEM_NAME", "Linux"},
+		{"CMAKE_SYSTEM_NAME", c.systemName},
 		{"CMAKE_SYSTEM_PROCESSOR", c.systemProcessor},
 	}
-	if c.sysroot != "" {
+	if c.systemName == "Darwin" {
+		values = append(values,
+			[2]string{"CMAKE_OSX_ARCHITECTURES", c.systemProcessor},
+			[2]string{"CMAKE_OSX_DEPLOYMENT_TARGET", c.deploymentTarget},
+		)
+		if c.sysroot != "" {
+			values = append(values, [2]string{"CMAKE_OSX_SYSROOT", c.sysroot})
+		}
+	} else if c.sysroot != "" {
 		values = append(values, [2]string{"CMAKE_SYSROOT", c.sysroot})
 	}
 	values = append(values,
@@ -193,6 +258,13 @@ func (c *Target) cmakeToolchain() string {
 		[2]string{"CMAKE_C_COMPILER_TARGET", c.targetTriple},
 		[2]string{"CMAKE_CXX_COMPILER_TARGET", c.targetTriple},
 	)
+	if c.systemName == "Darwin" {
+		values = append(values,
+			[2]string{"CMAKE_EXE_LINKER_FLAGS_INIT", "-fuse-ld=lld"},
+			[2]string{"CMAKE_SHARED_LINKER_FLAGS_INIT", "-fuse-ld=lld"},
+			[2]string{"CMAKE_MODULE_LINKER_FLAGS_INIT", "-fuse-ld=lld"},
+		)
+	}
 	if c.sysroot != "" {
 		values = append(values,
 			[2]string{"CMAKE_FIND_ROOT_PATH_MODE_PROGRAM", "NEVER"},
@@ -206,17 +278,6 @@ func (c *Target) cmakeToolchain() string {
 		fmt.Fprintf(&out, "if(NOT DEFINED %s)\n  set(%s \"%s\")\nendif()\n", value[0], value[0], cmakeEscape(value[1]))
 	}
 	return out.String()
-}
-
-func linuxTarget(target string) (triple, processor string, err error) {
-	switch target {
-	case "amd64-linux":
-		return "x86_64-linux-gnu", "x86_64", nil
-	case "arm64-linux":
-		return "aarch64-linux-gnu", "aarch64", nil
-	default:
-		return "", "", fmt.Errorf("unsupported C target %s", target)
-	}
 }
 
 func validateToolchain(toolchain Toolchain) error {
@@ -260,13 +321,22 @@ func hasCMakeToolchain(args []string) bool {
 	return false
 }
 
-func missingCompilerFlags(args []string, triple, sysroot string) []string {
+func missingCompilerFlags(args, defaults []string) []string {
 	var flags []string
-	if !hasTargetFlag(args) {
-		flags = append(flags, "--target="+triple)
-	}
-	if sysroot != "" && !hasSysrootFlag(args) {
-		flags = append(flags, "--sysroot="+sysroot)
+	for _, flag := range defaults {
+		if strings.HasPrefix(flag, "--target=") && hasTargetFlag(args) {
+			continue
+		}
+		if (strings.HasPrefix(flag, "--sysroot=") || strings.HasPrefix(flag, "-isysroot")) && hasSysrootFlag(args) {
+			continue
+		}
+		if strings.HasPrefix(flag, "-mmacosx-version-min=") && hasFlag(args, "-mmacosx-version-min") {
+			continue
+		}
+		if strings.HasPrefix(flag, "-fuse-ld=") && hasFlag(args, "-fuse-ld") {
+			continue
+		}
+		flags = append(flags, flag)
 	}
 	return flags
 }
@@ -335,7 +405,13 @@ func setEnvFlags(env []string, key string, defaults []string) []string {
 		if strings.HasPrefix(flag, "--target=") && hasTargetFlag(args) {
 			continue
 		}
-		if strings.HasPrefix(flag, "--sysroot=") && hasSysrootFlag(args) {
+		if (strings.HasPrefix(flag, "--sysroot=") || strings.HasPrefix(flag, "-isysroot")) && hasSysrootFlag(args) {
+			continue
+		}
+		if strings.HasPrefix(flag, "-mmacosx-version-min=") && hasFlag(args, "-mmacosx-version-min") {
+			continue
+		}
+		if strings.HasPrefix(flag, "-fuse-ld=") && hasFlag(args, "-fuse-ld") {
 			continue
 		}
 		if value != "" {
