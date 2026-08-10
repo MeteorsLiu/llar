@@ -140,13 +140,10 @@ jobs:
       - name: Prepare macOS 14.5 SDK
         run: |
           archive="$RUNNER_TEMP/MacOSX14.5.sdk.tar.xz"
-          sdk_root="$RUNNER_TEMP/macos-sdk"
           curl --fail --location --retry 3 \
             "https://github.com/joseluisq/macosx-sdks/releases/download/14.5/MacOSX14.5.sdk.tar.xz" \
             --output "$archive"
           echo "6e146275d19f027faa2e8354da5e0267513abf013b8f16ad65a231653a2b1c5d  $archive" | sha256sum --check
-          mkdir -p "$sdk_root"
-          tar -xJf "$archive" -C "$sdk_root"
 
       - name: Prepare formula and source repositories
         run: |
@@ -163,8 +160,7 @@ jobs:
           git -C "$formula_repo" commit --quiet -m "Cross compile E2E formulas"
 
           cp testdata/crosscompile-e2e/install-sysroot "$source_repo/"
-          tar -cJf "$source_repo/sysroot.tar.xz" \
-            -C "$RUNNER_TEMP/macos-sdk/MacOSX14.5.sdk" .
+          cp "$RUNNER_TEMP/MacOSX14.5.sdk.tar.xz" "$source_repo/sysroot.tar.xz"
           chmod +x "$source_repo/install-sysroot"
           git -C "$source_repo" init --initial-branch=main
           git -C "$source_repo" config user.email crosscompile-e2e@example.com
