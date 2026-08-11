@@ -149,8 +149,6 @@ func TestSysroot(t *testing.T) {
 			}
 		})
 	}
-	t.Setenv("PKG_CONFIG_PATH", "/deps/lib/pkgconfig")
-
 	a := New("", "", "")
 	a.Sysroot("/sdk")
 
@@ -159,11 +157,10 @@ func TestSysroot(t *testing.T) {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
-	if got, ok := os.LookupEnv("PKG_CONFIG_SYSROOT_DIR"); ok {
-		t.Errorf("PKG_CONFIG_SYSROOT_DIR = %q, want unset", got)
-	}
-	if got := os.Getenv("PKG_CONFIG_LIBDIR"); got != "/deps/lib/pkgconfig" {
-		t.Errorf("PKG_CONFIG_LIBDIR = %q, want /deps/lib/pkgconfig", got)
+	for _, key := range []string{"PKG_CONFIG_SYSROOT_DIR", "PKG_CONFIG_LIBDIR"} {
+		if got, ok := os.LookupEnv(key); ok {
+			t.Errorf("%s = %q, want unset", key, got)
+		}
 	}
 }
 

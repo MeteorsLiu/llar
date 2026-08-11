@@ -29,18 +29,13 @@ func New(sourceDir, buildDir, installDir string) *AutoTools {
 // Source overrides the source directory.
 func (a *AutoTools) Source(dir string) { a.sourceDir = dir }
 
-// Sysroot sets the target system root for compiler, linker, and pkg-config
-// lookups. Both compiler spellings are supplied so the same Formula works for
-// generic and Apple targets.
+// Sysroot sets the target system root for the compiler and linker. Both
+// compiler spellings are supplied so the same Formula works for generic and
+// Apple targets.
 func (a *AutoTools) Sysroot(root string) {
 	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
 		appendFlag(key, "--sysroot="+root)
 		appendFlag(key, "-isysroot"+root)
-	}
-	if _, ok := os.LookupEnv("PKG_CONFIG_LIBDIR"); !ok {
-		// Use stores LLAR dependency .pc directories in PKG_CONFIG_PATH. Restrict
-		// lookup to them without rewriting their absolute installation prefixes.
-		os.Setenv("PKG_CONFIG_LIBDIR", os.Getenv("PKG_CONFIG_PATH"))
 	}
 }
 
