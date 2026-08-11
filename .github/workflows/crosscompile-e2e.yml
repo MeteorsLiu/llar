@@ -128,7 +128,7 @@ jobs:
       - name: Cross compile libuv with Formula-managed musl
         run: |
           musl_log="$RUNNER_TEMP/libuv-linux-arm64-musl.log"
-          "$RUNNER_TEMP/llar" make libuv/libuv@v1.52.1 \
+          "$RUNNER_TEMP/llar" make libuv/libuv@v1.49.2 \
             --os linux \
             --arch arm64 \
             --require libc=musl-1.1.19 \
