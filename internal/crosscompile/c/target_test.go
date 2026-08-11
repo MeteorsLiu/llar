@@ -194,14 +194,11 @@ func TestUseCMake(t *testing.T) {
 	if got, want := patch.AppendArg, []string{"-DCMAKE_TOOLCHAIN_FILE:FILEPATH=" + c.toolchainFile}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
 	}
-	if got, _ := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
-		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q, want /sdk", got)
+	if got, ok := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); ok {
+		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q, want unset", got)
 	}
-	libDirs, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR")
-	for _, want := range []string{"/deps/lib/pkgconfig", filepath.Join("/sdk", "usr", "lib", "pkgconfig")} {
-		if !slices.Contains(filepath.SplitList(libDirs), want) {
-			t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", libDirs, want)
-		}
+	if got, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR"); got != "/deps/lib/pkgconfig" {
+		t.Fatalf("PKG_CONFIG_LIBDIR = %q, want /deps/lib/pkgconfig", got)
 	}
 	patch = c.Use(build.Command{Name: "cmake", Args: []string{"--build", "build"}})
 	if len(patch.AppendArg) != 0 {
@@ -263,14 +260,11 @@ func TestUseAutotools(t *testing.T) {
 	if got, want := patch.AppendArg, []string{"--host=aarch64-linux-gnu"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
 	}
-	if got, _ := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
-		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q, want /sdk", got)
+	if got, ok := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); ok {
+		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q, want unset", got)
 	}
-	libDirs, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR")
-	for _, want := range []string{"/deps/lib/pkgconfig", filepath.Join("/sdk", "usr", "lib", "pkgconfig")} {
-		if !slices.Contains(filepath.SplitList(libDirs), want) {
-			t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", libDirs, want)
-		}
+	if got, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR"); got != "/deps/lib/pkgconfig" {
+		t.Fatalf("PKG_CONFIG_LIBDIR = %q, want /deps/lib/pkgconfig", got)
 	}
 
 	patch = c.Use(build.Command{Name: configure, Args: []string{"--host=custom-linux"}})
@@ -283,14 +277,12 @@ func TestUsePkgConfig(t *testing.T) {
 	c := newTestTarget(t)
 	depPaths := strings.Join([]string{"/deps/a/lib/pkgconfig", "/deps/b/lib/pkgconfig"}, string(os.PathListSeparator))
 	patch := c.Use(build.Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_PATH=" + depPaths}})
-	if got, _ := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
-		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q", got)
+	if got, ok := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); ok {
+		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q, want unset", got)
 	}
 	got, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR")
-	for _, want := range []string{"/deps/a/lib/pkgconfig", "/deps/b/lib/pkgconfig", filepath.Join("/sdk", "usr", "lib", "pkgconfig")} {
-		if !slices.Contains(filepath.SplitList(got), want) {
-			t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", got, want)
-		}
+	if got != depPaths {
+		t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", got, depPaths)
 	}
 	patch = c.Use(build.Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_LIBDIR=/custom"}})
 	if got, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR"); got != "/custom" {

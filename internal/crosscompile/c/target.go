@@ -200,15 +200,10 @@ func (c *Target) pkgConfigPatch(commandEnv []string) build.Patch {
 		return build.Patch{}
 	}
 	env := append([]string(nil), commandEnv...)
-	env = setMissingEnv(env, "PKG_CONFIG_SYSROOT_DIR", c.sysroot)
 	libDirs, _ := envValue(env, "PKG_CONFIG_PATH")
-	paths := filepath.SplitList(libDirs)
-	paths = append(paths,
-		filepath.Join(c.sysroot, "usr", "lib64", "pkgconfig"),
-		filepath.Join(c.sysroot, "usr", "lib", "pkgconfig"),
-		filepath.Join(c.sysroot, "usr", "share", "pkgconfig"),
-	)
-	env = setMissingEnv(env, "PKG_CONFIG_LIBDIR", strings.Join(paths, string(os.PathListSeparator)))
+	// Use stores LLAR dependency .pc directories in PKG_CONFIG_PATH. Restrict
+	// lookup to them without rewriting their absolute installation prefixes.
+	env = setMissingEnv(env, "PKG_CONFIG_LIBDIR", libDirs)
 	return build.Patch{Env: env}
 }
 

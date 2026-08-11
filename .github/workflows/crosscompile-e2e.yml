@@ -28,7 +28,7 @@ jobs:
       - name: Install LLVM
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 lld-18 llvm-18
+          sudo apt-get install --yes clang-18 lld-18 llvm-18 pkg-config
           echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
 
       - name: Download Bootlin glibc and musl arm64 toolchains
@@ -55,8 +55,9 @@ jobs:
           formula_repo="$RUNNER_TEMP/llarhub"
           source_repo="$RUNNER_TEMP/glibc-source"
           musl_source_repo="$RUNNER_TEMP/musl-source"
+          consumer_source_repo="$RUNNER_TEMP/pkgconfig-consumer-source"
 
-          mkdir -p "$formula_repo" "$source_repo" "$musl_source_repo"
+          mkdir -p "$formula_repo" "$source_repo" "$musl_source_repo" "$consumer_source_repo"
           cp -R testdata/kodo-e2e/formulas/. "$formula_repo/"
           cp -R testdata/crosscompile-e2e/formulas/. "$formula_repo/"
           git -C "$formula_repo" init --initial-branch=main
@@ -91,10 +92,20 @@ jobs:
           git -C "$musl_source_repo" commit --quiet -m "Add musl 1.1.19 toolchain"
           git -C "$musl_source_repo" tag v1.1.19
 
+          cp testdata/crosscompile-e2e/pkgconfig-consumer/project.cmake "$consumer_source_repo/CMakeLists.txt"
+          cp testdata/crosscompile-e2e/consumer.c "$consumer_source_repo/main.c"
+          git -C "$consumer_source_repo" init --initial-branch=main
+          git -C "$consumer_source_repo" config user.email crosscompile-e2e@example.com
+          git -C "$consumer_source_repo" config user.name "Cross Compile E2E"
+          git -C "$consumer_source_repo" add .
+          git -C "$consumer_source_repo" commit --quiet -m "Add pkg-config dependency consumer"
+          git -C "$consumer_source_repo" tag v1.0.0
+
           git config --global protocol.file.allow always
           git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
           git config --global url."file://$source_repo".insteadOf "https://github.com/bminor/glibc.git"
           git config --global url."file://$musl_source_repo".insteadOf "https://github.com/ifduyue/musl.git"
+          git config --global url."file://$consumer_source_repo".insteadOf "https://github.com/llar/pkgconfig-consumer.git"
 
       - name: Cross compile zlib with default sysroot
         run: |
@@ -125,6 +136,14 @@ jobs:
             exit 1
           fi
 
+      - name: Cross compile pkg-config dependency consumer
+        run: |
+          "$RUNNER_TEMP/llar" make llar/pkgconfig-consumer@v1.0.0 \
+            --os linux \
+            --arch arm64 \
+            --output "$RUNNER_TEMP/pkgconfig-consumer-linux-arm64" \
+            --verbose
+
       - name: Cross compile libuv with Formula-managed musl
         run: |
           musl_log="$RUNNER_TEMP/libuv-linux-arm64-musl.log"
@@ -154,6 +173,13 @@ jobs:
         with:
           name: zlib-linux-arm64-custom-libc
           path: ${{ runner.temp }}/zlib-linux-arm64-custom-libc
+          if-no-files-found: error
+
+      - name: Upload pkg-config consumer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkgconfig-consumer-linux-arm64
+          path: ${{ runner.temp }}/pkgconfig-consumer-linux-arm64
           if-no-files-found: error
 
       - name: Upload musl libuv artifact
@@ -188,6 +214,12 @@ jobs:
         with:
           name: zlib-linux-arm64-custom-libc
           path: ${{ runner.temp }}/zlib-linux-arm64-custom-libc
+
+      - name: Download pkg-config consumer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pkgconfig-consumer-linux-arm64
+          path: ${{ runner.temp }}/pkgconfig-consumer-linux-arm64
 
       - name: Download musl libuv artifact
         uses: actions/download-artifact@v4
@@ -239,6 +271,17 @@ jobs:
             -o "$consumer"
           ldd "$consumer" | tee "$RUNNER_TEMP/custom-libc-dynamic-libraries.txt"
           grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/custom-libc-dynamic-libraries.txt"
+          "$consumer"
+
+      - name: Inspect and run pkg-config dependency consumer
+        run: |
+          consumer="$RUNNER_TEMP/pkgconfig-consumer-linux-arm64/bin/llar-pkgconfig-consumer"
+
+          chmod +x "$consumer"
+          file "$consumer" | tee "$RUNNER_TEMP/pkgconfig-consumer-format.txt"
+          grep -E "ELF 64-bit LSB.*ARM aarch64" "$RUNNER_TEMP/pkgconfig-consumer-format.txt"
+          ldd "$consumer" | tee "$RUNNER_TEMP/pkgconfig-consumer-dynamic-libraries.txt"
+          grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/pkgconfig-consumer-dynamic-libraries.txt"
           "$consumer"
 
       - name: Compare glibc and musl libuv ABIs

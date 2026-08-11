@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 
@@ -160,19 +159,11 @@ func TestSysroot(t *testing.T) {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
-	if got := os.Getenv("PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
-		t.Errorf("PKG_CONFIG_SYSROOT_DIR = %q, want /sdk", got)
+	if got, ok := os.LookupEnv("PKG_CONFIG_SYSROOT_DIR"); ok {
+		t.Errorf("PKG_CONFIG_SYSROOT_DIR = %q, want unset", got)
 	}
-	libDirs := filepath.SplitList(os.Getenv("PKG_CONFIG_LIBDIR"))
-	for _, want := range []string{
-		"/deps/lib/pkgconfig",
-		filepath.Join("/sdk", "usr", "lib64", "pkgconfig"),
-		filepath.Join("/sdk", "usr", "lib", "pkgconfig"),
-		filepath.Join("/sdk", "usr", "share", "pkgconfig"),
-	} {
-		if !slices.Contains(libDirs, want) {
-			t.Errorf("PKG_CONFIG_LIBDIR = %q, want %q", libDirs, want)
-		}
+	if got := os.Getenv("PKG_CONFIG_LIBDIR"); got != "/deps/lib/pkgconfig" {
+		t.Errorf("PKG_CONFIG_LIBDIR = %q, want /deps/lib/pkgconfig", got)
 	}
 }
 

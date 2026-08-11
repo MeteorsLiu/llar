@@ -38,17 +38,10 @@ func (a *AutoTools) Sysroot(root string) {
 		appendFlag(key, "--sysroot="+root)
 		appendFlag(key, "-isysroot"+root)
 	}
-	if _, ok := os.LookupEnv("PKG_CONFIG_SYSROOT_DIR"); !ok {
-		os.Setenv("PKG_CONFIG_SYSROOT_DIR", root)
-	}
 	if _, ok := os.LookupEnv("PKG_CONFIG_LIBDIR"); !ok {
-		paths := filepath.SplitList(os.Getenv("PKG_CONFIG_PATH"))
-		paths = append(paths,
-			filepath.Join(root, "usr", "lib64", "pkgconfig"),
-			filepath.Join(root, "usr", "lib", "pkgconfig"),
-			filepath.Join(root, "usr", "share", "pkgconfig"),
-		)
-		os.Setenv("PKG_CONFIG_LIBDIR", strings.Join(paths, string(os.PathListSeparator)))
+		// Use stores LLAR dependency .pc directories in PKG_CONFIG_PATH. Restrict
+		// lookup to them without rewriting their absolute installation prefixes.
+		os.Setenv("PKG_CONFIG_LIBDIR", os.Getenv("PKG_CONFIG_PATH"))
 	}
 }
 
