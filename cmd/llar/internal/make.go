@@ -12,14 +12,12 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
-	"github.com/goplus/llar/internal/build/c"
-	"github.com/goplus/llar/internal/build/c/llvm"
+	"github.com/goplus/llar/internal/crosscompile"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/modules/modlocal"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
-	ccmetadata "github.com/goplus/llar/x/metadata/cc"
 	"github.com/spf13/cobra"
 )
 
@@ -144,18 +142,6 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 	if runTest && crossCompile {
 		return fmt.Errorf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
 	}
-	var targetRoot module.Version
-	var useCTarget bool
-	if crossCompile {
-		// TODO: Add other language target policies alongside this C case when
-		// they provide build.Target implementations.
-		cSysroot, ok := c.Sysroot(targetOS, targetArch)
-		useCTarget = ok
-		_, customLibc := matrix.Require["libc"]
-		if useCTarget && !customLibc && root.Path != cSysroot.Path {
-			targetRoot = cSysroot
-		}
-	}
 	loadOpts := modules.Options{
 		FormulaStore: store,
 		Matrix:       matrix,
@@ -163,15 +149,6 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 	mods, err := modules.Load(ctx, root, loadOpts)
 	if err != nil {
 		return fmt.Errorf("failed to load modules: %w", err)
-	}
-	var sysrootMods []*modules.Module
-	if targetRoot != (module.Version{}) {
-		// The default sysroot has no dependencies, but modules.Load still owns
-		// selecting the Formula whose fromVer applies to targetRoot.Version.
-		sysrootMods, err = modules.Load(ctx, targetRoot, loadOpts)
-		if err != nil {
-			return fmt.Errorf("failed to load sysroot %s@%s: %w", targetRoot.Path, targetRoot.Version, err)
-		}
 	}
 
 	var buildOutput io.Writer = io.Discard
@@ -195,63 +172,23 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		defer os.RemoveAll(tmpDir)
 		buildOpts.WorkspaceDir = tmpDir
 	}
-	var target build.Target
-	// TODO: Add other language build.Target preparation alongside this C case.
-	if useCTarget {
-		targetMatrix := targetArch + "-" + targetOS
-		bootstrapToolchain, err := llvm.New(llvm.Config{OS: targetOS, Arch: targetArch})
-		if err != nil {
-			return fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
-		}
-		bootstrapTarget, err := c.NewTarget(c.Config{
-			Matrix:    targetMatrix,
-			Toolchain: bootstrapToolchain.Toolchain,
-		})
-		if err != nil {
-			return err
-		}
-		defer bootstrapTarget.Close()
-		target = bootstrapTarget
-
-		if targetRoot != (module.Version{}) {
-			selectedSysroot := sysrootMods[0]
-
-			sysrootOpts := buildOpts
-			sysrootOpts.RunTest = false
-			sysrootOpts.Target = bootstrapTarget
-			sysrootBuilder, err := build.NewBuilder(sysrootOpts)
-			if err != nil {
-				return fmt.Errorf("failed to create sysroot builder: %w", err)
-			}
-			sysrootResults, err := sysrootBuilder.Build(ctx, sysrootMods)
-			if err != nil {
-				return fmt.Errorf("failed to build sysroot %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
-			}
-			metadata, err := ccmetadata.Parse(sysrootResults[len(sysrootResults)-1].Metadata)
-			if err != nil {
-				return fmt.Errorf("failed to parse sysroot metadata for %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
-			}
-			if metadata.Sysroot() == "" {
-				return fmt.Errorf("sysroot metadata for %s@%s has no sysroot", selectedSysroot.Path, selectedSysroot.Version)
-			}
-
-			configuredToolchain, err := llvm.New(llvm.Config{OS: targetOS, Arch: targetArch, Sysroot: metadata.Sysroot()})
-			if err != nil {
-				return fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
-			}
-			configuredTarget, err := c.NewTarget(c.Config{
-				Matrix:    targetMatrix,
-				Toolchain: configuredToolchain.Toolchain,
-				Sysroot:   metadata.Sysroot(),
-			})
-			if err != nil {
-				return err
-			}
-			defer configuredTarget.Close()
-			target = configuredTarget
-		}
+	target, err := crosscompile.Load(ctx, root, crosscompile.Config{
+		Store:        store,
+		Matrix:       matrix,
+		Stdout:       buildOpts.Stdout,
+		Stderr:       buildOpts.Stderr,
+		WorkspaceDir: buildOpts.WorkspaceDir,
+		Cache:        buildOpts.Cache,
+	})
+	if err != nil {
+		return err
 	}
-	buildOpts.Target = target
+	if target != nil {
+		if closer, ok := target.(io.Closer); ok {
+			defer closer.Close()
+		}
+		buildOpts.Target = target
+	}
 	builder, err := build.NewBuilder(buildOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create builder: %w", err)

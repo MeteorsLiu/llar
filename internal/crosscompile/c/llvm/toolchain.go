@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/goplus/llar/internal/build/c"
+	"github.com/goplus/llar/internal/crosscompile/c"
 )
 
 // Toolchain is a prepared LLVM C-family toolchain.
