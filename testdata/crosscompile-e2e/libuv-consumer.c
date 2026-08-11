@@ -9,12 +9,21 @@
 int main(void) {
     size_t built_size = uv_loop_size();
     size_t consumer_size = sizeof(uv_loop_t);
-    int matches = built_size == consumer_size;
 
     printf("libuv loop size: library=%zu consumer=%zu\n",
         built_size, consumer_size);
-    if (matches != EXPECT_ABI_MATCH) {
+
+#if EXPECT_ABI_MATCH
+    // The musl-built library and musl consumer must use the same pthread layout.
+    if (built_size != consumer_size) {
         return 1;
     }
+#else
+    // The glibc consumer is the negative control: uv_loop_t contains libc-owned
+    // pthread types, so matching sizes would fail to distinguish the two ABIs.
+    if (built_size == consumer_size) {
+        return 1;
+    }
+#endif
     return 0;
 }
