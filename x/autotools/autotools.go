@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/x/pkgconfig"
