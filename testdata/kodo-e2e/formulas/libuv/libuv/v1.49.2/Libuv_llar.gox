@@ -18,6 +18,7 @@ onBuild ctx => {
 		}
 	}
 	c.buildType "Release"
+	c.defineBool "CMAKE_VERBOSE_MAKEFILE", true
 	c.defineBool "LIBUV_BUILD_SHARED", false
 	c.defineBool "BUILD_TESTING", false
 	c.configure
