@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build-linux-arm64:
-    name: "Build zlib: Linux amd64 -> Linux arm64 (glibc/musl)"
+    name: "Build C libs: Linux amd64 -> Linux arm64"
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -125,20 +125,20 @@ jobs:
             exit 1
           fi
 
-      - name: Cross compile zlib with Formula-managed musl
+      - name: Cross compile libuv with Formula-managed musl
         run: |
-          musl_log="$RUNNER_TEMP/zlib-linux-arm64-musl.log"
-          "$RUNNER_TEMP/llar" make madler/zlib@v1.3.1 \
+          musl_log="$RUNNER_TEMP/libuv-linux-arm64-musl.log"
+          "$RUNNER_TEMP/llar" make libuv/libuv@v1.52.1 \
             --os linux \
             --arch arm64 \
             --require libc=musl-1.1.19 \
-            --output "$RUNNER_TEMP/zlib-linux-arm64-musl" \
+            --output "$RUNNER_TEMP/libuv-linux-arm64-musl" \
             --json \
             --verbose \
-            > "$RUNNER_TEMP/zlib-linux-arm64-musl.json" \
+            > "$RUNNER_TEMP/libuv-linux-arm64-musl.json" \
             2> >(tee "$musl_log" >&2)
           grep -F '"path":"ifduyue/musl","version":"v1.1.19"' \
-            "$RUNNER_TEMP/zlib-linux-arm64-musl.json"
+            "$RUNNER_TEMP/libuv-linux-arm64-musl.json"
           grep -E -- '--sysroot=[^ ]*/ifduyue/musl@v1\.1\.19-' "$musl_log"
           grep -F -- '--target=aarch64-linux-musl' "$musl_log"
 
@@ -156,15 +156,15 @@ jobs:
           path: ${{ runner.temp }}/zlib-linux-arm64-custom-libc
           if-no-files-found: error
 
-      - name: Upload musl zlib artifact
+      - name: Upload musl libuv artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zlib-linux-arm64-musl
-          path: ${{ runner.temp }}/zlib-linux-arm64-musl
+          name: libuv-linux-arm64-musl
+          path: ${{ runner.temp }}/libuv-linux-arm64-musl
           if-no-files-found: error
 
   run-linux-arm64:
-    name: "Run zlib: Linux arm64 (glibc/musl)"
+    name: "Run C libs: Linux arm64"
     needs: build-linux-arm64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
@@ -189,11 +189,11 @@ jobs:
           name: zlib-linux-arm64-custom-libc
           path: ${{ runner.temp }}/zlib-linux-arm64-custom-libc
 
-      - name: Download musl zlib artifact
+      - name: Download musl libuv artifact
         uses: actions/download-artifact@v4
         with:
-          name: zlib-linux-arm64-musl
-          path: ${{ runner.temp }}/zlib-linux-arm64-musl
+          name: libuv-linux-arm64-musl
+          path: ${{ runner.temp }}/libuv-linux-arm64-musl
 
       - name: Inspect, link, and run default-sysroot consumer
         run: |
@@ -241,28 +241,32 @@ jobs:
           grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/custom-libc-dynamic-libraries.txt"
           "$consumer"
 
-      - name: Inspect, link, and run musl consumer
+      - name: Compare glibc and musl libuv ABIs
         run: |
-          lib="$RUNNER_TEMP/zlib-linux-arm64-musl/lib/libz.a"
-          member_dir="$RUNNER_TEMP/zlib-musl-members"
-          consumer="$RUNNER_TEMP/zlib-musl-consumer"
+          root="$RUNNER_TEMP/libuv-linux-arm64-musl"
+          lib="$root/lib/libuv.a"
+          glibc_consumer="$RUNNER_TEMP/libuv-glibc-consumer"
+          musl_consumer="$RUNNER_TEMP/libuv-musl-consumer"
 
-          mkdir -p "$member_dir"
-          (
-            cd "$member_dir"
-            ar x "$lib" adler32.o
-          )
-          file "$member_dir/adler32.o" | tee "$RUNNER_TEMP/zlib-musl-format.txt"
-          grep -F "ELF 64-bit LSB relocatable, ARM aarch64" "$RUNNER_TEMP/zlib-musl-format.txt"
+          cc \
+            -DEXPECT_ABI_MATCH=0 \
+            -I"$root/include" \
+            testdata/crosscompile-e2e/libuv-consumer.c \
+            "$lib" \
+            -pthread -ldl -lrt \
+            -o "$glibc_consumer"
+          "$glibc_consumer"
 
           musl-gcc \
-            -I"$RUNNER_TEMP/zlib-linux-arm64-musl/include" \
-            testdata/crosscompile-e2e/consumer.c \
+            -DEXPECT_ABI_MATCH=1 \
+            -I"$root/include" \
+            testdata/crosscompile-e2e/libuv-consumer.c \
             "$lib" \
-            -o "$consumer"
-          readelf --program-headers "$consumer" | tee "$RUNNER_TEMP/musl-program-headers.txt"
+            -pthread -ldl -lrt \
+            -o "$musl_consumer"
+          readelf --program-headers "$musl_consumer" | tee "$RUNNER_TEMP/musl-program-headers.txt"
           grep -F "/lib/ld-musl-aarch64.so.1" "$RUNNER_TEMP/musl-program-headers.txt"
-          "$consumer"
+          "$musl_consumer"
 
   build-darwin-arm64:
     name: "Build zlib: Linux amd64 host to Darwin arm64 target"

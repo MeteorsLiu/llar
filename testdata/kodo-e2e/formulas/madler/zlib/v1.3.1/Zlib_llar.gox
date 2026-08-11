@@ -7,9 +7,6 @@ onRequire (proj, deps) => {
 		if libc[0] == "glibc-2.27" {
 			deps.require "bminor/glibc", libc[0]
 		}
-		if libc[0] == "musl-1.1.19" {
-			deps.require "ifduyue/musl", "v1.1.19"
-		}
 	}
 }
 
@@ -18,7 +15,7 @@ onBuild ctx => {
 
 	a := autotools.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
 	for _, dep := range ctx.Proj.Deps {
-		if dep.Path == "bminor/glibc" || dep.Path == "ifduyue/musl" {
+		if dep.Path == "bminor/glibc" {
 			a.sysroot ctx.outputDir(dep)
 		}
 	}
