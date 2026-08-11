@@ -31,23 +31,36 @@ jobs:
           sudo apt-get install --yes clang-18 lld-18 llvm-18
           echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
 
-      - name: Prepare Bootlin glibc 2.24 arm64 sysroot
+      - name: Prepare Bootlin glibc 2.24 and 2.27 arm64 sysroots
         run: |
-          archive="$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2"
-          toolchain_root="$RUNNER_TEMP/bootlin"
+          default_archive="$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2"
+          custom_archive="$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2"
+          default_toolchain_root="$RUNNER_TEMP/bootlin/glibc-2.24"
+          custom_toolchain_root="$RUNNER_TEMP/bootlin/glibc-2.27"
+
           curl --fail --location --retry 3 \
             "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2" \
-            --output "$archive"
-          echo "530137589c4588599ebd115c12630c75e79c935ac4f34b0941404036f5e25026  $archive" | sha256sum --check
-          mkdir -p "$toolchain_root"
-          tar -xjf "$archive" -C "$toolchain_root"
+            --output "$default_archive"
+          curl --fail --location --retry 3 \
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2018.11-1.tar.bz2" \
+            --output "$custom_archive"
+          echo "530137589c4588599ebd115c12630c75e79c935ac4f34b0941404036f5e25026  $default_archive" | sha256sum --check
+          echo "abae0522480b9f37ff6cee4249e147e7cb78e1997cc6f76dba7e0fb8ec04221d  $custom_archive" | sha256sum --check
 
-          root="$toolchain_root/aarch64--glibc--stable"
-          sysroot="$root/aarch64-buildroot-linux-gnu/sysroot"
-          gcc_runtime="$root/lib/gcc/aarch64-buildroot-linux-gnu/5.4.0"
+          mkdir -p "$default_toolchain_root" "$custom_toolchain_root"
+          tar -xjf "$default_archive" -C "$default_toolchain_root"
+          tar -xjf "$custom_archive" -C "$custom_toolchain_root"
+
+          default_root="$default_toolchain_root/aarch64--glibc--stable"
+          default_sysroot="$default_root/aarch64-buildroot-linux-gnu/sysroot"
+          default_gcc_runtime="$default_root/lib/gcc/aarch64-buildroot-linux-gnu/5.4.0"
+          custom_root="$custom_toolchain_root/aarch64--glibc--stable-2018.11-1"
+          custom_sysroot="$custom_root/aarch64-buildroot-linux-gnu/sysroot"
+          custom_gcc_runtime="$custom_root/lib/gcc/aarch64-buildroot-linux-gnu/7.3.0"
           # Clang receives only the sysroot path, so install Bootlin's target
           # runtime, for example crtbeginS.o and libgcc.a, into its library path.
-          cp -a "$gcc_runtime/." "$sysroot/usr/lib/"
+          cp -a "$default_gcc_runtime/." "$default_sysroot/usr/lib/"
+          cp -a "$custom_gcc_runtime/." "$custom_sysroot/usr/lib/"
 
       - name: Prepare formula and source repositories
         run: |
@@ -65,7 +78,7 @@ jobs:
 
           cp testdata/crosscompile-e2e/install-sysroot "$source_repo/"
           tar -cJf "$source_repo/sysroot.tar.xz" \
-            -C "$RUNNER_TEMP/bootlin/aarch64--glibc--stable/aarch64-buildroot-linux-gnu/sysroot" .
+            -C "$RUNNER_TEMP/bootlin/glibc-2.24/aarch64--glibc--stable/aarch64-buildroot-linux-gnu/sysroot" .
           chmod +x "$source_repo/install-sysroot"
           git -C "$source_repo" init --initial-branch=main
           git -C "$source_repo" config user.email crosscompile-e2e@example.com
@@ -73,6 +86,12 @@ jobs:
           git -C "$source_repo" add .
           git -C "$source_repo" commit --quiet -m "Add sysroot installer"
           git -C "$source_repo" tag glibc-2.24
+
+          tar -cJf "$source_repo/sysroot.tar.xz" \
+            -C "$RUNNER_TEMP/bootlin/glibc-2.27/aarch64--glibc--stable-2018.11-1/aarch64-buildroot-linux-gnu/sysroot" .
+          git -C "$source_repo" add sysroot.tar.xz
+          git -C "$source_repo" commit --quiet -m "Update sysroot to glibc 2.27"
+          git -C "$source_repo" tag glibc-2.27
 
           git config --global protocol.file.allow always
           git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
@@ -89,16 +108,23 @@ jobs:
 
       - name: Cross compile zlib with Formula-managed libc
         run: |
+          custom_log="$RUNNER_TEMP/zlib-linux-arm64-custom-libc.log"
           "$RUNNER_TEMP/llar" make madler/zlib@v1.3.1 \
             --os linux \
             --arch arm64 \
-            --require libc=glibc-2.24 \
+            --require libc=glibc-2.27 \
             --output "$RUNNER_TEMP/zlib-linux-arm64-custom-libc" \
             --json \
             --verbose \
-            > "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json"
-          grep -F '"path":"bminor/glibc","version":"glibc-2.24"' \
+            > "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json" \
+            2> >(tee "$custom_log" >&2)
+          grep -F '"path":"bminor/glibc","version":"glibc-2.27"' \
             "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json"
+          grep -E -- '--sysroot=[^ ]*/bminor/glibc@glibc-2\.27-' "$custom_log"
+          if grep -F -- 'bminor/glibc@glibc-2.24-' "$custom_log"; then
+            echo "custom libc build used the default glibc 2.24 sysroot" >&2
+            exit 1
+          fi
 
       - name: Upload default-sysroot zlib artifact
         uses: actions/upload-artifact@v4
