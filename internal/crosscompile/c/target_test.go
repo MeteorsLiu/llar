@@ -186,9 +186,22 @@ func TestUseCMakeWritesToolchainLazily(t *testing.T) {
 
 func TestUseCMake(t *testing.T) {
 	c := newTestTarget(t)
-	patch := c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	patch := c.Use(build.Command{
+		Name: "cmake",
+		Args: []string{"-S", ".", "-B", "build"},
+		Env:  []string{"PKG_CONFIG_PATH=/deps/lib/pkgconfig"},
+	})
 	if got, want := patch.AppendArg, []string{"-DCMAKE_TOOLCHAIN_FILE:FILEPATH=" + c.toolchainFile}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
+	}
+	if got, _ := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
+		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q, want /sdk", got)
+	}
+	libDirs, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR")
+	for _, want := range []string{"/deps/lib/pkgconfig", filepath.Join("/sdk", "usr", "lib", "pkgconfig")} {
+		if !slices.Contains(filepath.SplitList(libDirs), want) {
+			t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", libDirs, want)
+		}
 	}
 	patch = c.Use(build.Command{Name: "cmake", Args: []string{"--build", "build"}})
 	if len(patch.AppendArg) != 0 {
@@ -236,7 +249,7 @@ func TestUseAutotools(t *testing.T) {
 	patch := c.Use(build.Command{
 		Name: configure,
 		Args: []string{"--build=x86_64-apple-darwin"},
-		Env:  []string{"CC=/custom/cc", "CFLAGS=-O2 --target=custom"},
+		Env:  []string{"CC=/custom/cc", "CFLAGS=-O2 --target=custom", "PKG_CONFIG_PATH=/deps/lib/pkgconfig"},
 	})
 	if got, _ := envValue(patch.Env, "CC"); got != "/custom/cc" {
 		t.Fatalf("CC override = %q, want /custom/cc", got)
@@ -249,6 +262,15 @@ func TestUseAutotools(t *testing.T) {
 	}
 	if got, want := patch.AppendArg, []string{"--host=aarch64-linux-gnu"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
+	}
+	if got, _ := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
+		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q, want /sdk", got)
+	}
+	libDirs, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR")
+	for _, want := range []string{"/deps/lib/pkgconfig", filepath.Join("/sdk", "usr", "lib", "pkgconfig")} {
+		if !slices.Contains(filepath.SplitList(libDirs), want) {
+			t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", libDirs, want)
+		}
 	}
 
 	patch = c.Use(build.Command{Name: configure, Args: []string{"--host=custom-linux"}})

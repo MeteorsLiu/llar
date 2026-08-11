@@ -131,7 +131,9 @@ func (c *Target) Use(cmd build.Command) build.Patch {
 				c.tempDir = tempDir
 				c.toolchainFile = toolchainFile
 			}
-			return build.Patch{AppendArg: []string{"-DCMAKE_TOOLCHAIN_FILE:FILEPATH=" + c.toolchainFile}}
+			patch := c.pkgConfigPatch(cmd.Env)
+			patch.AppendArg = []string{"-DCMAKE_TOOLCHAIN_FILE:FILEPATH=" + c.toolchainFile}
+			return patch
 		}
 	case "pkg-config":
 		return c.pkgConfigPatch(cmd.Env)
@@ -166,6 +168,9 @@ func (c *Target) autotoolsPatch(cmd build.Command) build.Patch {
 	env = setMissingEnv(env, "RANLIB", c.toolchain.Ranlib())
 	env = setMissingEnv(env, "NM", c.toolchain.NM())
 	env = setMissingEnv(env, "STRIP", c.toolchain.Strip())
+	if c.sysroot != "" {
+		env = c.pkgConfigPatch(env).Env
+	}
 
 	for _, arg := range cmd.Args {
 		if arg == "--host" || strings.HasPrefix(arg, "--host=") {
