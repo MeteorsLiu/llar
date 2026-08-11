@@ -2,9 +2,11 @@ package crosscompile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
+	"strings"
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
@@ -15,6 +17,7 @@ import (
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/mod/module"
 	ccmetadata "github.com/goplus/llar/x/metadata/cc"
+	"github.com/kballard/go-shellquote"
 )
 
 // Config contains the build resources used to prepare a cross-compile target.
@@ -25,6 +28,90 @@ type Config struct {
 	Stderr       io.Writer
 	WorkspaceDir string
 	Cache        cache.Cache
+}
+
+// customTarget uses the bootstrap toolchain to build libc itself. When a
+// consumer such as zlib supplies cmake.Sysroot or autotools.Sysroot, it switches
+// to the toolchain selected from that sysroot.
+type customTarget struct {
+	targetOS     string
+	targetArch   string
+	targetMatrix string
+	bootstrap    *c.Target
+	configured   *c.Target
+}
+
+func (t *customTarget) Use(command build.Command) build.Patch {
+	root, err := commandSysroot(command)
+	if err != nil {
+		panic(err)
+	}
+	if root == "" && t.configured == nil {
+		return t.bootstrap.Use(command)
+	}
+	if t.configured == nil {
+		toolchain, err := llvm.New(llvm.Config{OS: t.targetOS, Arch: t.targetArch, Sysroot: root})
+		if err != nil {
+			panic(fmt.Errorf("prepare C toolchain for %s: %w", t.targetMatrix, err))
+		}
+		target, err := c.NewTarget(c.Config{
+			Matrix:    t.targetMatrix,
+			Toolchain: toolchain.Toolchain,
+			Sysroot:   root,
+		})
+		if err != nil {
+			panic(err)
+		}
+		t.configured = target
+	}
+	return t.configured.Use(command)
+}
+
+func (t *customTarget) Close() error {
+	var configuredErr error
+	if t.configured != nil {
+		configuredErr = t.configured.Close()
+	}
+	return errors.Join(t.bootstrap.Close(), configuredErr)
+}
+
+func commandSysroot(command build.Command) (string, error) {
+	var root string
+	for _, entry := range command.Env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS":
+			metadata, err := ccmetadata.Parse(value)
+			if err != nil {
+				return "", fmt.Errorf("parse %s for cross compile target: %w", key, err)
+			}
+			if metadata.Sysroot() != "" {
+				root = metadata.Sysroot()
+			}
+		}
+	}
+	metadata, err := ccmetadata.Parse(shellquote.Join(command.Args...))
+	if err != nil {
+		return "", fmt.Errorf("parse command flags for cross compile target: %w", err)
+	}
+	if metadata.Sysroot() != "" {
+		root = metadata.Sysroot()
+	}
+	for _, arg := range command.Args {
+		key, value, ok := strings.Cut(arg, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimPrefix(key, "-D")
+		key, _, _ = strings.Cut(key, ":")
+		if key == "CMAKE_SYSROOT" || key == "CMAKE_OSX_SYSROOT" {
+			root = value
+		}
+	}
+	return root, nil
 }
 
 // Load returns the target used to cross-compile root. A nil target means the
@@ -61,8 +148,16 @@ func Load(ctx context.Context, root module.Version, config Config) (build.Target
 	}
 
 	_, customLibc := config.Matrix.Require["libc"]
-	if customLibc || root.Path == cSysroot.Path {
+	if root.Path == cSysroot.Path {
 		return bootstrapTarget, nil
+	}
+	if customLibc {
+		return &customTarget{
+			targetOS:     targetOS,
+			targetArch:   targetArch,
+			targetMatrix: targetMatrix,
+			bootstrap:    bootstrapTarget,
+		}, nil
 	}
 	defer bootstrapTarget.Close()
 

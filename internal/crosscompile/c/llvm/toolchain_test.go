@@ -11,12 +11,13 @@ import (
 func TestNewUsesPreparedPath(t *testing.T) {
 	dir := fakeToolDir(t)
 	t.Setenv("PATH", dir)
+	gnuSysroot := fakeLinuxSysroot(t, "gnu")
 
-	toolchain, err := New(Config{OS: "linux", Arch: "arm64", Sysroot: "/sdk"})
+	toolchain, err := New(Config{OS: "linux", Arch: "arm64", Sysroot: gnuSysroot})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := toolchain.CC(), []string{filepath.Join(dir, "clang"), "--target=aarch64-linux-gnu", "-fuse-ld=lld", "--sysroot=/sdk"}; !reflect.DeepEqual(got, want) {
+	if got, want := toolchain.CC(), []string{filepath.Join(dir, "clang"), "--target=aarch64-linux-gnu", "-fuse-ld=lld", "--sysroot=" + gnuSysroot}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("CC = %q, want %q", got, want)
 	}
 	if got, want := toolchain.Linker(), []string{filepath.Join(dir, "ld.lld")}; !reflect.DeepEqual(got, want) {
@@ -51,6 +52,30 @@ func TestNewUsesPreparedPath(t *testing.T) {
 	}
 }
 
+func TestNewSelectsLinuxEnvironmentFromSysroot(t *testing.T) {
+	dir := fakeToolDir(t)
+	t.Setenv("PATH", dir)
+
+	for _, environment := range []string{"gnu", "musl"} {
+		t.Run(environment, func(t *testing.T) {
+			sysroot := fakeLinuxSysroot(t, environment)
+			toolchain, err := New(Config{OS: "linux", Arch: "arm64", Sysroot: sysroot})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := strings.Join(toolchain.CC(), " ")
+			if !strings.Contains(args, "--target=aarch64-linux-"+environment) {
+				t.Fatalf("CC = %q, want %s target", args, environment)
+			}
+		})
+	}
+
+	unknown := t.TempDir()
+	if _, err := New(Config{OS: "linux", Arch: "arm64", Sysroot: unknown}); err == nil || !strings.Contains(err.Error(), "cannot determine LLVM target environment") {
+		t.Fatalf("New unknown sysroot error = %v", err)
+	}
+}
+
 func TestNewErrors(t *testing.T) {
 	if _, err := New(Config{OS: "plan9", Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "unsupported LLVM target") {
 		t.Fatalf("New unsupported target error = %v", err)
@@ -80,4 +105,26 @@ func fakeToolDir(t *testing.T) string {
 		}
 	}
 	return dir
+}
+
+func fakeLinuxSysroot(t *testing.T, environment string) string {
+	t.Helper()
+	root := t.TempDir()
+	var loader string
+	switch environment {
+	case "gnu":
+		loader = "lib64/ld-linux-test.so.37"
+	case "musl":
+		loader = "lib/ld-musl-test.so.42"
+	default:
+		t.Fatalf("unsupported fake Linux sysroot %s", environment)
+	}
+	path := filepath.Join(root, filepath.FromSlash(loader))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }

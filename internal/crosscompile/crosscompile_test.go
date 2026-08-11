@@ -102,13 +102,15 @@ func TestLoadBootstrapTarget(t *testing.T) {
 func TestLoadDefaultSysroot(t *testing.T) {
 	installFakeLLVM(t)
 	matrix, _ := linuxCrossMatrix()
+	arch := matrix.Require["arch"][0]
+	sysroot := fakeCrossSysroot(t, arch, "gnu")
 	target, err := Load(context.Background(), module.Version{Path: "owner/repo", Version: "v1.0.0"}, Config{
 		Store:        localSysrootFormulas(t),
 		Matrix:       matrix,
 		Stdout:       io.Discard,
 		Stderr:       io.Discard,
 		WorkspaceDir: t.TempDir(),
-		Cache:        metadataCache{metadata: "--sysroot=/target-sdk"},
+		Cache:        metadataCache{metadata: "--sysroot=" + sysroot},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -120,8 +122,68 @@ func TestLoadDefaultSysroot(t *testing.T) {
 		t.Cleanup(func() { _ = closer.Close() })
 	}
 	patch := target.Use(build.Command{Name: "cc"})
-	if args := strings.Join(patch.PrependArg, " "); !strings.Contains(args, "--sysroot=/target-sdk") {
+	if args := strings.Join(patch.PrependArg, " "); !strings.Contains(args, "--sysroot="+sysroot) {
 		t.Fatalf("compiler args = %q, want configured sysroot", args)
+	}
+}
+
+func TestLoadCustomLibcUsesCommandSysroot(t *testing.T) {
+	installFakeLLVM(t)
+	matrix, _ := linuxCrossMatrix()
+	arch := matrix.Require["arch"][0]
+	matrix.Require["libc"] = []string{"custom"}
+	target, err := Load(context.Background(), module.Version{Path: "owner/repo", Version: "v1.0.0"}, Config{Matrix: matrix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closer, ok := target.(io.Closer); ok {
+		t.Cleanup(func() { _ = closer.Close() })
+	}
+
+	sysroot := fakeCrossSysroot(t, arch, "musl")
+	patch := target.Use(build.Command{Name: "cc", Args: []string{"--sysroot=" + sysroot}})
+	args := strings.Join(patch.PrependArg, " ")
+	wantTriple := "x86_64-linux-musl"
+	if arch == "arm64" {
+		wantTriple = "aarch64-linux-musl"
+	}
+	if !strings.Contains(args, "--target="+wantTriple) {
+		t.Fatalf("compiler args = %q, want target %q", args, wantTriple)
+	}
+}
+
+func TestCommandSysroot(t *testing.T) {
+	tests := []struct {
+		name    string
+		command build.Command
+		want    string
+	}{
+		{
+			name:    "autotools environment",
+			command: build.Command{Env: []string{"CFLAGS=-O2 --sysroot=/autotools-sdk -isysroot/autotools-sdk"}},
+			want:    "/autotools-sdk",
+		},
+		{
+			name:    "cmake definition",
+			command: build.Command{Args: []string{"-DCMAKE_SYSROOT:STRING=/cmake-sdk"}},
+			want:    "/cmake-sdk",
+		},
+		{
+			name:    "compiler option",
+			command: build.Command{Args: []string{"-c", "source.c", "-isysroot/compiler-sdk"}},
+			want:    "/compiler-sdk",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := commandSysroot(tt.command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("commandSysroot = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -218,6 +280,32 @@ func installFakeLLVM(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", dir)
+}
+
+func fakeCrossSysroot(t *testing.T, arch, environment string) string {
+	t.Helper()
+	root := t.TempDir()
+	var loader string
+	switch arch + "-" + environment {
+	case "amd64-gnu":
+		loader = "lib64/ld-linux-x86-64.so.2"
+	case "amd64-musl":
+		loader = "lib/ld-musl-x86_64.so.1"
+	case "arm64-gnu":
+		loader = "lib/ld-linux-aarch64.so.1"
+	case "arm64-musl":
+		loader = "lib/ld-musl-aarch64.so.1"
+	default:
+		t.Fatalf("unsupported fake Linux sysroot %s/%s", arch, environment)
+	}
+	path := filepath.Join(root, filepath.FromSlash(loader))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func localSysrootFormulas(t *testing.T) formulaStore {

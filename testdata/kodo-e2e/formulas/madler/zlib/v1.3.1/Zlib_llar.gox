@@ -3,8 +3,13 @@ id "madler/zlib"
 fromVer "v1.3.1"
 
 onRequire (proj, deps) => {
-	if libc := target.require["libc"]; len(libc) > 0 && libc[0] == "glibc-2.27" {
-		deps.require "bminor/glibc", libc[0]
+	if libc := target.require["libc"]; len(libc) > 0 {
+		if libc[0] == "glibc-2.27" {
+			deps.require "bminor/glibc", libc[0]
+		}
+		if libc[0] == "musl-1.1.19" {
+			deps.require "ifduyue/musl", "v1.1.19"
+		}
 	}
 }
 
@@ -13,7 +18,7 @@ onBuild ctx => {
 
 	a := autotools.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
 	for _, dep := range ctx.Proj.Deps {
-		if dep.Path == "bminor/glibc" {
+		if dep.Path == "bminor/glibc" || dep.Path == "ifduyue/musl" {
 			a.sysroot ctx.outputDir(dep)
 		}
 	}
