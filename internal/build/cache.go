@@ -80,7 +80,7 @@ func (b *Builder) installDir(modPath, version string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(b.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, version, b.matrix)), nil
+	return filepath.Join(b.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, version, b.matrix.Combinations()[0])), nil
 }
 
 // loadCache reads the cache file for a module from the workspace directory.

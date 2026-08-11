@@ -2,32 +2,48 @@ package build
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"testing/fstest"
 
 	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/build/c"
 	"github.com/goplus/llar/internal/execbroker"
 	internalformula "github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/vcs"
 )
 
-type testTarget struct {
-	command Command
-}
-
-func (t *testTarget) Use(command Command) Patch {
-	t.command = command
-	return Patch{
-		Name:       "/toolchain/cc",
-		PrependArg: []string{"--target=aarch64-linux-gnu"},
-		AppendArg:  []string{"--sysroot=/sdk"},
-		Env:        []string{"CC=/toolchain/cc"},
+func newCTarget(t *testing.T, targetOS, targetArch string) *c.Target {
+	t.Helper()
+	triple := "x86_64-linux-gnu"
+	if targetArch == "arm64" {
+		triple = "aarch64-linux-gnu"
 	}
+	target, err := c.NewTarget(c.Config{
+		Matrix: targetArch + "-" + targetOS,
+		Toolchain: c.NewToolchain(
+			[]string{"/toolchain/cc", "--target=" + triple, "--sysroot=/sdk"},
+			[]string{"/toolchain/c++", "--target=" + triple, "--sysroot=/sdk"},
+			[]string{"/toolchain/ld.lld"},
+			"/toolchain/ar",
+			"/toolchain/ranlib",
+			"/toolchain/nm",
+			"/toolchain/strip",
+		),
+		Sysroot: "/sdk",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = target.Close() })
+	return target
 }
 
 func TestTargetMiddleware(t *testing.T) {
-	target := new(testTarget)
+	target := newCTarget(t, "linux", "arm64")
 	got := targetMiddleware(target)(execbroker.Request{
 		Name: "cc",
 		Args: []string{"-c", "a.c"},
@@ -37,25 +53,37 @@ func TestTargetMiddleware(t *testing.T) {
 	if got.Name != "/toolchain/cc" {
 		t.Fatalf("Name = %q", got.Name)
 	}
-	if want := []string{"--target=aarch64-linux-gnu", "-c", "a.c", "--sysroot=/sdk"}; !reflect.DeepEqual(got.Args, want) {
+	if want := []string{"--target=aarch64-linux-gnu", "--sysroot=/sdk", "-c", "a.c"}; !reflect.DeepEqual(got.Args, want) {
 		t.Fatalf("Args = %q, want %q", got.Args, want)
 	}
-	if want := []string{"CC=/toolchain/cc"}; !reflect.DeepEqual(got.Env, want) {
+	if want := []string{"CFLAGS=-O2"}; !reflect.DeepEqual(got.Env, want) {
 		t.Fatalf("Env = %q, want %q", got.Env, want)
-	}
-	if target.command.Name != "cc" || target.command.Dir != "/src" {
-		t.Fatalf("Command = %+v", target.command)
-	}
-	if want := []string{"CFLAGS=-O2"}; !reflect.DeepEqual(target.command.Env, want) {
-		t.Fatalf("Command.Env = %q, want %q", target.command.Env, want)
 	}
 }
 
 func TestBuildAppliesTargetToFormulaCommands(t *testing.T) {
 	store := setupTestStore(t)
-	builder := setupBuilder(t, store, "arm64-linux")
-	target := new(testTarget)
-	builder.target = target
+	targetOS, targetArch := "linux", "amd64"
+	if runtime.GOOS == targetOS && runtime.GOARCH == targetArch {
+		targetArch = "arm64"
+	}
+	target := newCTarget(t, targetOS, targetArch)
+	builder, err := NewBuilder(Options{
+		Store: store,
+		Matrix: classfile.Matrix{Require: map[string][]string{
+			"os":   {targetOS},
+			"arch": {targetArch},
+		}},
+		WorkspaceDir: t.TempDir(),
+		Target:       target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder.newRepo = func(string) (vcs.Repo, error) {
+		return newMockRepo(filepath.Join(testSourceDir, "test", "liba")), nil
+	}
+	t.Setenv("PATH", "")
 
 	var commandName string
 	root := &modules.Module{
@@ -71,8 +99,5 @@ func TestBuildAppliesTargetToFormulaCommands(t *testing.T) {
 	}
 	if commandName != "/toolchain/cc" {
 		t.Fatalf("command name = %q, want /toolchain/cc", commandName)
-	}
-	if target.command.Name != "cc" {
-		t.Fatalf("target command = %+v", target.command)
 	}
 }

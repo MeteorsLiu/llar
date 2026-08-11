@@ -178,7 +178,7 @@ func TestBuildModuleRejectsCrossTargetTest(t *testing.T) {
 	}}
 
 	err := buildModule(context.Background(), nil, "owner/repo", "v1.0.0", matrix, true)
-	want := fmt.Sprintf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
+	want := fmt.Sprintf("failed to create builder: llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
 	if err == nil || err.Error() != want {
 		t.Fatalf("buildModule error = %v, want %q", err, want)
 	}

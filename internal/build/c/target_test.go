@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/mod/module"
 )
 
@@ -59,17 +58,17 @@ func TestDarwinTarget(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = target.Close() })
 
-	patch := target.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c"}})
+	patch := target.Use(Command{Name: "cc", Args: []string{"-c", "a.c"}})
 	want := []string{"--target=x86_64-apple-macos10.13", "-fuse-ld=lld", "-isysroot/sdk"}
 	if !reflect.DeepEqual(patch.PrependArg, want) {
 		t.Fatalf("PrependArg = %q, want %q", patch.PrependArg, want)
 	}
-	patch = target.Use(build.Command{Name: "cc", Args: []string{"a.o", "-shared"}})
+	patch = target.Use(Command{Name: "cc", Args: []string{"a.o", "-shared"}})
 	if !reflect.DeepEqual(patch.PrependArg, want) {
 		t.Fatalf("link PrependArg = %q, want %q", patch.PrependArg, want)
 	}
 
-	patch = target.Use(build.Command{
+	patch = target.Use(Command{
 		Name: "cc",
 		Args: []string{"--target=custom", "-isysroot/custom", "-fuse-ld=custom"},
 	})
@@ -82,7 +81,7 @@ func TestDarwinTarget(t *testing.T) {
 	if err := os.WriteFile(configure, []byte("#!/bin/sh\nCHOST=${CHOST-}\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	patch = target.Use(build.Command{Name: configure})
+	patch = target.Use(Command{Name: configure})
 	if len(patch.AppendArg) != 0 {
 		t.Fatalf("configure AppendArg = %q, want no unsupported arguments", patch.AppendArg)
 	}
@@ -98,7 +97,7 @@ func TestDarwinTarget(t *testing.T) {
 		}
 	}
 
-	patch = target.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	patch = target.Use(Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
 	data, err := os.ReadFile(strings.TrimPrefix(patch.AppendArg[0], "-DCMAKE_TOOLCHAIN_FILE:FILEPATH="))
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +126,7 @@ func TestDarwinArm64Compiler(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = target.Close() })
 
-	patch := target.Use(build.Command{Name: "cc"})
+	patch := target.Use(Command{Name: "cc"})
 	if !slices.Contains(patch.PrependArg, "--target=arm64-apple-macos11.0") {
 		t.Fatalf("PrependArg = %q, want prepared arm64 compiler target", patch.PrependArg)
 	}
@@ -140,15 +139,15 @@ func TestBootstrapTargetOmitsSysroot(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 
-	patch := c.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c"}})
+	patch := c.Use(Command{Name: "cc", Args: []string{"-c", "a.c"}})
 	if got, want := patch.PrependArg, []string{"--target=aarch64-linux-gnu", "-fuse-ld=lld"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("PrependArg = %q, want %q", got, want)
 	}
-	if patch := c.Use(build.Command{Name: "pkg-config"}); patch.Env != nil {
+	if patch := c.Use(Command{Name: "pkg-config"}); patch.Env != nil {
 		t.Fatalf("pkg-config Patch = %+v, want no sysroot environment", patch)
 	}
 
-	patch = c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	patch = c.Use(Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
 	data, err := os.ReadFile(strings.TrimPrefix(patch.AppendArg[0], "-DCMAKE_TOOLCHAIN_FILE:FILEPATH="))
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +163,7 @@ func TestUseCMakeWritesToolchainLazily(t *testing.T) {
 		t.Fatalf("New created CMake files: toolchainFile=%q tempDir=%q", c.toolchainFile, c.tempDir)
 	}
 
-	c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	c.Use(Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
 	path := c.toolchainFile
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -186,15 +185,15 @@ func TestUseCMakeWritesToolchainLazily(t *testing.T) {
 
 func TestUseCMake(t *testing.T) {
 	c := newTestTarget(t)
-	patch := c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
+	patch := c.Use(Command{Name: "cmake", Args: []string{"-S", ".", "-B", "build"}})
 	if got, want := patch.AppendArg, []string{"-DCMAKE_TOOLCHAIN_FILE:FILEPATH=" + c.toolchainFile}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
 	}
-	patch = c.Use(build.Command{Name: "cmake", Args: []string{"--build", "build"}})
+	patch = c.Use(Command{Name: "cmake", Args: []string{"--build", "build"}})
 	if len(patch.AppendArg) != 0 {
 		t.Fatalf("build Patch = %+v, want no toolchain argument", patch)
 	}
-	patch = c.Use(build.Command{Name: "cmake", Args: []string{"-S", ".", "--toolchain", "/custom.cmake"}})
+	patch = c.Use(Command{Name: "cmake", Args: []string{"-S", ".", "--toolchain", "/custom.cmake"}})
 	if len(patch.AppendArg) != 0 {
 		t.Fatalf("explicit toolchain Patch = %+v", patch)
 	}
@@ -202,7 +201,7 @@ func TestUseCMake(t *testing.T) {
 
 func TestUseDirectCommands(t *testing.T) {
 	c := newTestTarget(t)
-	patch := c.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c"}})
+	patch := c.Use(Command{Name: "cc", Args: []string{"-c", "a.c"}})
 	if patch.Name != "/llvm/bin/clang" {
 		t.Fatalf("Name = %q", patch.Name)
 	}
@@ -210,18 +209,18 @@ func TestUseDirectCommands(t *testing.T) {
 	if !reflect.DeepEqual(patch.PrependArg, want) {
 		t.Fatalf("PrependArg = %q, want %q", patch.PrependArg, want)
 	}
-	patch = c.Use(build.Command{Name: "cc", Args: []string{"a.o", "-o", "a"}})
+	patch = c.Use(Command{Name: "cc", Args: []string{"a.o", "-o", "a"}})
 	if !reflect.DeepEqual(patch.PrependArg, want) {
 		t.Fatalf("link PrependArg = %q, want %q", patch.PrependArg, want)
 	}
-	patch = c.Use(build.Command{Name: "cc", Args: []string{"-c", "a.c", "--target=custom", "--sysroot=/custom"}})
+	patch = c.Use(Command{Name: "cc", Args: []string{"-c", "a.c", "--target=custom", "--sysroot=/custom"}})
 	if !reflect.DeepEqual(patch.PrependArg, want) {
 		t.Fatalf("PrependArg = %q, want prepared defaults %q", patch.PrependArg, want)
 	}
-	if patch := c.Use(build.Command{Name: filepath.Join("custom", "cc")}); patch.Name != "" {
+	if patch := c.Use(Command{Name: filepath.Join("custom", "cc")}); patch.Name != "" {
 		t.Fatalf("explicit compiler path was rewritten: %+v", patch)
 	}
-	patch = c.Use(build.Command{Name: "ld"})
+	patch = c.Use(Command{Name: "ld"})
 	if patch.Name != "/llvm/bin/ld.lld" {
 		t.Fatalf("linker Name = %q, want /llvm/bin/ld.lld", patch.Name)
 	}
@@ -233,7 +232,7 @@ func TestUseAutotools(t *testing.T) {
 	if err := os.WriteFile(configure, []byte("#!/bin/sh\n# options: --build=BUILD --host=HOST\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	patch := c.Use(build.Command{
+	patch := c.Use(Command{
 		Name: configure,
 		Args: []string{"--build=x86_64-apple-darwin"},
 		Env:  []string{"CC=/custom/cc", "CFLAGS=-O2 --target=custom"},
@@ -251,7 +250,7 @@ func TestUseAutotools(t *testing.T) {
 		t.Fatalf("AppendArg = %q, want %q", got, want)
 	}
 
-	patch = c.Use(build.Command{Name: configure, Args: []string{"--host=custom-linux"}})
+	patch = c.Use(Command{Name: configure, Args: []string{"--host=custom-linux"}})
 	if len(patch.AppendArg) != 0 {
 		t.Fatalf("explicit host AppendArg = %q, want no duplicate host", patch.AppendArg)
 	}
@@ -260,7 +259,7 @@ func TestUseAutotools(t *testing.T) {
 func TestUsePkgConfig(t *testing.T) {
 	c := newTestTarget(t)
 	depPaths := strings.Join([]string{"/deps/a/lib/pkgconfig", "/deps/b/lib/pkgconfig"}, string(os.PathListSeparator))
-	patch := c.Use(build.Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_PATH=" + depPaths}})
+	patch := c.Use(Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_PATH=" + depPaths}})
 	if got, _ := envValue(patch.Env, "PKG_CONFIG_SYSROOT_DIR"); got != "/sdk" {
 		t.Fatalf("PKG_CONFIG_SYSROOT_DIR = %q", got)
 	}
@@ -270,7 +269,7 @@ func TestUsePkgConfig(t *testing.T) {
 			t.Fatalf("PKG_CONFIG_LIBDIR = %q, want %q", got, want)
 		}
 	}
-	patch = c.Use(build.Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_LIBDIR=/custom"}})
+	patch = c.Use(Command{Name: "pkg-config", Env: []string{"PKG_CONFIG_LIBDIR=/custom"}})
 	if got, _ := envValue(patch.Env, "PKG_CONFIG_LIBDIR"); got != "/custom" {
 		t.Fatalf("PKG_CONFIG_LIBDIR override = %q, want /custom", got)
 	}

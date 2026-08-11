@@ -41,6 +41,10 @@ func paths(mods []*modules.Module) string {
 	return strings.Join(s, " ")
 }
 
+func testMatrix(value string) classfile.Matrix {
+	return classfile.Matrix{Require: map[string][]string{"matrix": {value}}}
+}
+
 // versions returns the "Path@Version" strings for []module.Version.
 func versions(vers []module.Version) string {
 	var s []string
@@ -308,7 +312,7 @@ func setupBuilder(t *testing.T, store repo.Store, matrix string) *Builder {
 	workspaceDir := t.TempDir()
 	return &Builder{
 		store:        store,
-		matrix:       matrix,
+		matrix:       testMatrix(matrix),
 		workspaceDir: workspaceDir,
 		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
@@ -512,7 +516,7 @@ func TestNewBuilder(t *testing.T) {
 		store := setupTestStore(t)
 		b, err := NewBuilder(Options{
 			Store:        store,
-			MatrixStr:    "amd64-linux",
+			Matrix:       classfile.Matrix{Require: map[string][]string{"matrix": {"amd64-linux"}}},
 			WorkspaceDir: tmpDir,
 		})
 		if err != nil {
@@ -521,8 +525,8 @@ func TestNewBuilder(t *testing.T) {
 		if b.workspaceDir != tmpDir {
 			t.Errorf("workspaceDir = %q, want %q", b.workspaceDir, tmpDir)
 		}
-		if b.matrix != "amd64-linux" {
-			t.Errorf("matrix = %q, want %q", b.matrix, "amd64-linux")
+		if got := b.matrix.Combinations()[0]; got != "amd64-linux" {
+			t.Errorf("matrix = %q, want %q", got, "amd64-linux")
 		}
 		if b.store != store {
 			t.Error("store not set correctly")
@@ -534,7 +538,7 @@ func TestNewBuilder(t *testing.T) {
 
 	t.Run("default workspace dir", func(t *testing.T) {
 		b, err := NewBuilder(Options{
-			MatrixStr: "arm64-darwin",
+			Matrix: classfile.Matrix{Require: map[string][]string{"matrix": {"arm64-darwin"}}},
 		})
 		if err != nil {
 			t.Fatalf("NewBuilder() error = %v", err)
@@ -668,7 +672,7 @@ func TestBuild_LocksEntireDependencyGraph(t *testing.T) {
 	buildCache := &graphLockCache{store: store, paths: paths}
 	b := &Builder{
 		store:        store,
-		matrix:       "amd64-linux",
+		matrix:       testMatrix("amd64-linux"),
 		workspaceDir: t.TempDir(),
 		cache:        buildCache,
 	}
@@ -700,7 +704,7 @@ func TestBuild_ReleasesGraphLocksAfterLockError(t *testing.T) {
 	buildCache := &graphLockCache{store: store, paths: []string{"a/dep", "m/root"}}
 	b := &Builder{
 		store:        store,
-		matrix:       "amd64-linux",
+		matrix:       testMatrix("amd64-linux"),
 		workspaceDir: t.TempDir(),
 		cache:        buildCache,
 	}
@@ -735,7 +739,7 @@ func TestBuild_OppositeGraphOrdersDoNotDeadlock(t *testing.T) {
 	newBuilder := func(id int) *Builder {
 		return &Builder{
 			store:        &oppositeGraphStore{id: id, locks: locks},
-			matrix:       "amd64-linux",
+			matrix:       testMatrix("amd64-linux"),
 			workspaceDir: t.TempDir(),
 			cache: &recordingCache{hits: map[module.Version]cache.Entry{
 				{Path: "test/x", Version: "1.0.0"}:     {Metadata: "x"},

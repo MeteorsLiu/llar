@@ -8,27 +8,31 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
 	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/build/c"
+	"github.com/goplus/llar/internal/build/c/llvm"
 	"github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
+	ccmetadata "github.com/goplus/llar/x/metadata/cc"
 )
 
 type Builder struct {
 	store        repo.Store
-	matrix       string
+	matrix       classfile.Matrix
 	runTest      bool
 	stdout       io.Writer
 	stderr       io.Writer
 	workspaceDir string
 	cache        cache.Cache
-	target       Target
+	target       *c.Target
 	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
@@ -39,8 +43,10 @@ type Result struct {
 }
 
 type Options struct {
-	Store     repo.Store
-	MatrixStr string
+	Store repo.Store
+	// Matrix is the selected build matrix used for cache identity and target
+	// preparation.
+	Matrix classfile.Matrix
 	// RunTest, when true, causes Build to invoke OnTest on the root target
 	// after OnBuild (or after reusing cached build metadata). The build
 	// cache is consulted as usual: on a cache hit the root's OnBuild is
@@ -53,7 +59,8 @@ type Options struct {
 	Stderr       io.Writer
 	WorkspaceDir string
 	Cache        cache.Cache
-	Target       Target
+	// Target overrides automatic C target and default sysroot preparation.
+	Target *c.Target
 }
 
 func runFormulaHook(fn func()) (err error) {
@@ -85,6 +92,16 @@ func defaultWorkspaceDir() (string, error) {
 
 // NewBuilder creates a new Builder.
 func NewBuilder(opts Options) (*Builder, error) {
+	var targetOS, targetArch string
+	if values := opts.Matrix.Require["os"]; len(values) > 0 {
+		targetOS = values[0]
+	}
+	if values := opts.Matrix.Require["arch"]; len(values) > 0 {
+		targetArch = values[0]
+	}
+	if opts.RunTest && (targetOS != runtime.GOOS || targetArch != runtime.GOARCH) {
+		return nil, fmt.Errorf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
+	}
 	workspaceDir := opts.WorkspaceDir
 	if workspaceDir == "" {
 		var err error
@@ -107,7 +124,7 @@ func NewBuilder(opts Options) (*Builder, error) {
 	}
 	return &Builder{
 		store:        opts.Store,
-		matrix:       opts.MatrixStr,
+		matrix:       opts.Matrix,
 		runTest:      opts.RunTest,
 		stdout:       stdout,
 		stderr:       stderr,
@@ -230,6 +247,84 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 }
 
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
+	buildTarget := b.target
+	var targetOS, targetArch string
+	if values := b.matrix.Require["os"]; len(values) > 0 {
+		targetOS = values[0]
+	}
+	if values := b.matrix.Require["arch"]; len(values) > 0 {
+		targetArch = values[0]
+	}
+	// A caller-supplied target owns all target and sysroot preparation. Without
+	// one, cross builds use LLAR's default C target policy.
+	if len(targets) > 0 && buildTarget == nil && (targetOS != runtime.GOOS || targetArch != runtime.GOARCH) {
+		cSysroot, useCTarget := c.Sysroot(targetOS, targetArch)
+		if useCTarget {
+			var sysrootMods []*modules.Module
+			_, customLibc := b.matrix.Require["libc"]
+			if !customLibc && targets[0].Path != cSysroot.Path {
+				var err error
+				// modules.Load selects the sysroot Formula whose fromVer applies to
+				// cSysroot.Version; the sysroot graph remains separate from targets.
+				sysrootMods, err = modules.Load(ctx, cSysroot, modules.Options{
+					FormulaStore: b.store,
+					Matrix:       b.matrix,
+				})
+				if err != nil {
+					return nil, fmt.Errorf("failed to load sysroot %s@%s: %w", cSysroot.Path, cSysroot.Version, err)
+				}
+			}
+
+			targetMatrix := targetArch + "-" + targetOS
+			bootstrapToolchain, err := llvm.New(llvm.Config{OS: targetOS, Arch: targetArch})
+			if err != nil {
+				return nil, fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
+			}
+			bootstrapTarget, err := c.NewTarget(c.Config{
+				Matrix:    targetMatrix,
+				Toolchain: bootstrapToolchain.Toolchain,
+			})
+			if err != nil {
+				return nil, err
+			}
+			defer bootstrapTarget.Close()
+			buildTarget = bootstrapTarget
+
+			if len(sysrootMods) > 0 {
+				selectedSysroot := sysrootMods[0]
+				sysrootBuilder := *b
+				sysrootBuilder.runTest = false
+				sysrootBuilder.target = bootstrapTarget
+				sysrootResults, err := sysrootBuilder.Build(ctx, sysrootMods)
+				if err != nil {
+					return nil, fmt.Errorf("failed to build sysroot %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
+				}
+				metadata, err := ccmetadata.Parse(sysrootResults[len(sysrootResults)-1].Metadata)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse sysroot metadata for %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
+				}
+				if metadata.Sysroot() == "" {
+					return nil, fmt.Errorf("sysroot metadata for %s@%s has no sysroot", selectedSysroot.Path, selectedSysroot.Version)
+				}
+
+				configuredToolchain, err := llvm.New(llvm.Config{OS: targetOS, Arch: targetArch, Sysroot: metadata.Sysroot()})
+				if err != nil {
+					return nil, fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
+				}
+				configuredTarget, err := c.NewTarget(c.Config{
+					Matrix:    targetMatrix,
+					Toolchain: configuredToolchain.Toolchain,
+					Sysroot:   metadata.Sysroot(),
+				})
+				if err != nil {
+					return nil, err
+				}
+				defer configuredTarget.Close()
+				buildTarget = configuredTarget
+			}
+		}
+	}
+
 	builtResults := make(map[module.Version]classfile.BuildResult)
 
 	// Identify the root target. By MVS convention (see constructBuildList
@@ -248,8 +343,8 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	}
 
 	var commandMiddleware execbroker.Middleware
-	if b.target != nil {
-		commandMiddleware = targetMiddleware(b.target)
+	if buildTarget != nil {
+		commandMiddleware = targetMiddleware(buildTarget)
 	}
 
 	build := func(mod *modules.Module) (Result, error) {
@@ -266,7 +361,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// Consult the build cache. A hit means we already have the
 		// module's build metadata and its installDir is populated from a
 		// previous successful build.
-		entry, cacheHit, err := b.cache.Get(ctx, cache.Key{Module: modVer, Matrix: b.matrix})
+		entry, cacheHit, err := b.cache.Get(ctx, cache.Key{Module: modVer, Matrix: b.matrix.Combinations()[0]})
 		if err != nil {
 			return Result{}, err
 		}
@@ -306,7 +401,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return b.installDir(m.Path, m.Version)
 		}
 		project := &classfile.Project{Deps: deps, SourceFS: mod.FS.(fs.ReadFileFS)}
-		buildContext := classfile.NewContext(project, tmpSourceDir, installDir, b.matrix, getOutputDir)
+		buildContext := classfile.NewContext(project, tmpSourceDir, installDir, b.matrix.Combinations()[0], getOutputDir)
 
 		// Inject results of already-built dependencies
 		for modVer, result := range builtResults {
@@ -357,7 +452,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// Save cache only on cache miss. A cache hit means the entry is
 		// already present and current; OnTest does not modify metadata.
 		if !cacheHit {
-			entry, err := b.cache.Put(ctx, cache.Key{Module: modVer, Matrix: b.matrix}, os.DirFS(installDir), cache.Entry{
+			entry, err := b.cache.Put(ctx, cache.Key{Module: modVer, Matrix: b.matrix.Combinations()[0]}, os.DirFS(installDir), cache.Entry{
 				Metadata: metadata,
 				Deps:     deps,
 			})
