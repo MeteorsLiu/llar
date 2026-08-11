@@ -52,12 +52,12 @@ func TestQueries(t *testing.T) {
 			var request execbroker.Request
 			var output string
 			err := execbroker.Do(execbroker.Scope{
-				Middleware: func(req execbroker.Request) execbroker.Request {
+				Middleware: func(req execbroker.Request) (execbroker.Request, error) {
 					request = req
 					req.Name = os.Args[0]
 					req.Args = []string{"-test.run=TestLookupHelperProcess"}
 					req.Env = append(os.Environ(), "GO_WANT_PKGCONFIG_HELPER=1")
-					return req
+					return req, nil
 				},
 			}, func() error {
 				var err error
@@ -92,7 +92,7 @@ func TestQueryErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := execbroker.Do(execbroker.Scope{
-				Middleware: func(req execbroker.Request) execbroker.Request {
+				Middleware: func(req execbroker.Request) (execbroker.Request, error) {
 					req.Name = os.Args[0]
 					req.Args = []string{"-test.run=TestLookupHelperProcess"}
 					req.Env = append(os.Environ(),
@@ -100,7 +100,7 @@ func TestQueryErrors(t *testing.T) {
 						"GO_PKGCONFIG_HELPER_FAIL=1",
 						"GO_PKGCONFIG_HELPER_STDERR="+tt.detail,
 					)
-					return req
+					return req, nil
 				},
 			}, func() error {
 				_, err := Libs("demo")
