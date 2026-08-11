@@ -3,17 +3,37 @@ package build
 import (
 	"os"
 
-	"github.com/goplus/llar/internal/build/c"
 	"github.com/goplus/llar/internal/execbroker"
 )
 
-func targetMiddleware(target *c.Target) execbroker.Middleware {
+// Command describes a command before target defaults are applied.
+type Command struct {
+	Name string
+	Args []string
+	Env  []string
+	Dir  string
+}
+
+// Patch contains target-specific changes for one command.
+type Patch struct {
+	Name       string
+	PrependArg []string
+	AppendArg  []string
+	Env        []string
+}
+
+// Target applies language-specific target defaults to build commands.
+type Target interface {
+	Use(Command) Patch
+}
+
+func targetMiddleware(target Target) execbroker.Middleware {
 	return func(req execbroker.Request) execbroker.Request {
 		env := req.Env
 		if env == nil {
 			env = os.Environ()
 		}
-		patch := target.Use(c.Command{
+		patch := target.Use(Command{
 			Name: req.Name,
 			Args: req.Args,
 			Env:  env,

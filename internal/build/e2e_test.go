@@ -129,7 +129,7 @@ func TestE2E_MatrixVariation(t *testing.T) {
 
 	// Verify each matrix has its own install directory
 	for _, matrix := range matrices {
-		b := &Builder{workspaceDir: wsDir, matrix: testMatrix(matrix)}
+		b := &Builder{workspaceDir: wsDir, matrix: matrix}
 		dir, _ := b.installDir("test/ctxcheck", "1.0.0")
 		if _, err := os.Stat(dir); err != nil {
 			t.Errorf("installDir not created for matrix %q: %v", matrix, err)
@@ -306,7 +306,7 @@ func TestE2E_RealZlibBuild(t *testing.T) {
 
 	b := &Builder{
 		store:        store,
-		matrix:       testMatrix(matrix),
+		matrix:       matrix,
 		workspaceDir: workspaceDir,
 		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
@@ -482,7 +482,7 @@ func TestE2E_RealLibpngBuild(t *testing.T) {
 
 	b := &Builder{
 		store:        store,
-		matrix:       testMatrix(matrix),
+		matrix:       matrix,
 		workspaceDir: workspaceDir,
 		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
@@ -580,7 +580,7 @@ func TestE2E_RealFreetypeBuild(t *testing.T) {
 
 	b := &Builder{
 		store:        store,
-		matrix:       testMatrix(matrix),
+		matrix:       matrix,
 		workspaceDir: workspaceDir,
 		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {

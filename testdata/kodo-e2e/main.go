@@ -541,7 +541,7 @@ func (s *suite) build(ctx context.Context, target module.Version, matrix, worksp
 	}
 	builder, err := build.NewBuilder(build.Options{
 		Store:        s.formulas,
-		Matrix:       targetMatrix,
+		MatrixStr:    matrix,
 		WorkspaceDir: workspaceDir,
 		Cache:        c,
 	})

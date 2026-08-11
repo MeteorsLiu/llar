@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/mod/module"
 	"github.com/kballard/go-shellquote"
 )
@@ -17,22 +18,6 @@ const (
 	darwinSysrootPath    = "joseluisq/macosx-sdks"
 	darwinSysrootVersion = "14.5"
 )
-
-// Command describes a command before C target defaults are applied.
-type Command struct {
-	Name string
-	Args []string
-	Env  []string
-	Dir  string
-}
-
-// Patch contains C target changes for one command.
-type Patch struct {
-	Name       string
-	PrependArg []string
-	AppendArg  []string
-	Env        []string
-}
 
 // Config contains the facts required to prepare a C target.
 type Config struct {
@@ -121,13 +106,13 @@ func (c *Target) Close() error {
 
 // Use returns C target defaults for cmd. Explicit Formula settings are
 // preserved.
-func (c *Target) Use(cmd Command) Patch {
+func (c *Target) Use(cmd build.Command) build.Patch {
 	base := filepath.Base(cmd.Name)
 	if base == "configure" {
 		return c.autotoolsPatch(cmd)
 	}
 	if filepath.Base(cmd.Name) != cmd.Name {
-		return Patch{}
+		return build.Patch{}
 	}
 
 	switch base {
@@ -146,7 +131,7 @@ func (c *Target) Use(cmd Command) Patch {
 				c.tempDir = tempDir
 				c.toolchainFile = toolchainFile
 			}
-			return Patch{AppendArg: []string{"-DCMAKE_TOOLCHAIN_FILE:FILEPATH=" + c.toolchainFile}}
+			return build.Patch{AppendArg: []string{"-DCMAKE_TOOLCHAIN_FILE:FILEPATH=" + c.toolchainFile}}
 		}
 	case "pkg-config":
 		return c.pkgConfigPatch(cmd.Env)
@@ -157,22 +142,22 @@ func (c *Target) Use(cmd Command) Patch {
 	case "ld", "ld.lld", "ld64.lld":
 		return commandPatch(c.toolchain.Linker())
 	case "ar", "llvm-ar":
-		return Patch{Name: c.toolchain.Archiver()}
+		return build.Patch{Name: c.toolchain.Archiver()}
 	case "ranlib", "llvm-ranlib":
-		return Patch{Name: c.toolchain.Ranlib()}
+		return build.Patch{Name: c.toolchain.Ranlib()}
 	case "nm", "llvm-nm":
-		return Patch{Name: c.toolchain.NM()}
+		return build.Patch{Name: c.toolchain.NM()}
 	case "strip", "llvm-strip":
-		return Patch{Name: c.toolchain.Strip()}
+		return build.Patch{Name: c.toolchain.Strip()}
 	}
-	return Patch{}
+	return build.Patch{}
 }
 
-func commandPatch(command []string) Patch {
-	return Patch{Name: command[0], PrependArg: command[1:]}
+func commandPatch(command []string) build.Patch {
+	return build.Patch{Name: command[0], PrependArg: command[1:]}
 }
 
-func (c *Target) autotoolsPatch(cmd Command) Patch {
+func (c *Target) autotoolsPatch(cmd build.Command) build.Patch {
 	env := append([]string(nil), cmd.Env...)
 	env = setMissingEnv(env, "CC", shellquote.Join(c.toolchain.CC()...))
 	env = setMissingEnv(env, "CXX", shellquote.Join(c.toolchain.CXX()...))
@@ -184,7 +169,7 @@ func (c *Target) autotoolsPatch(cmd Command) Patch {
 
 	for _, arg := range cmd.Args {
 		if arg == "--host" || strings.HasPrefix(arg, "--host=") {
-			return Patch{Env: env}
+			return build.Patch{Env: env}
 		}
 	}
 
@@ -198,16 +183,16 @@ func (c *Target) autotoolsPatch(cmd Command) Patch {
 	}
 	// Only scripts that declare --host receive the Autoconf target tuple.
 	// For example, zlib's custom configure declares CHOST but rejects --host.
-	patch := Patch{Env: env}
+	patch := build.Patch{Env: env}
 	if bytes.Contains(data, []byte("--host")) {
 		patch.AppendArg = []string{"--host=" + c.autotoolsHost}
 	}
 	return patch
 }
 
-func (c *Target) pkgConfigPatch(commandEnv []string) Patch {
+func (c *Target) pkgConfigPatch(commandEnv []string) build.Patch {
 	if c.sysroot == "" {
-		return Patch{}
+		return build.Patch{}
 	}
 	env := append([]string(nil), commandEnv...)
 	env = setMissingEnv(env, "PKG_CONFIG_SYSROOT_DIR", c.sysroot)
@@ -219,7 +204,7 @@ func (c *Target) pkgConfigPatch(commandEnv []string) Patch {
 		filepath.Join(c.sysroot, "usr", "share", "pkgconfig"),
 	)
 	env = setMissingEnv(env, "PKG_CONFIG_LIBDIR", strings.Join(paths, string(os.PathListSeparator)))
-	return Patch{Env: env}
+	return build.Patch{Env: env}
 }
 
 func (c *Target) cmakeToolchain() string {

@@ -130,7 +130,7 @@ func (h *handler) build(ctx context.Context, req request, info io.Writer) (resul
 
 	builder, err := build.NewBuilder(build.Options{
 		Store:        h.formulaStore,
-		Matrix:       req.matrix,
+		MatrixStr:    req.matrixStr,
 		Stdout:       info,
 		Stderr:       info,
 		WorkspaceDir: h.workspaceDir,

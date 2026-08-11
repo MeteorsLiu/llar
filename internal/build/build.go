@@ -8,31 +8,27 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 
 	classfile "github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/build/c"
-	"github.com/goplus/llar/internal/build/c/llvm"
 	"github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
-	ccmetadata "github.com/goplus/llar/x/metadata/cc"
 )
 
 type Builder struct {
 	store        repo.Store
-	matrix       classfile.Matrix
+	matrix       string
 	runTest      bool
 	stdout       io.Writer
 	stderr       io.Writer
 	workspaceDir string
 	cache        cache.Cache
-	target       *c.Target
+	target       Target
 	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
@@ -43,10 +39,8 @@ type Result struct {
 }
 
 type Options struct {
-	Store repo.Store
-	// Matrix is the selected build matrix used for cache identity and target
-	// preparation.
-	Matrix classfile.Matrix
+	Store     repo.Store
+	MatrixStr string
 	// RunTest, when true, causes Build to invoke OnTest on the root target
 	// after OnBuild (or after reusing cached build metadata). The build
 	// cache is consulted as usual: on a cache hit the root's OnBuild is
@@ -59,8 +53,7 @@ type Options struct {
 	Stderr       io.Writer
 	WorkspaceDir string
 	Cache        cache.Cache
-	// Target overrides automatic C target and default sysroot preparation.
-	Target *c.Target
+	Target       Target
 }
 
 func runFormulaHook(fn func()) (err error) {
@@ -92,16 +85,6 @@ func defaultWorkspaceDir() (string, error) {
 
 // NewBuilder creates a new Builder.
 func NewBuilder(opts Options) (*Builder, error) {
-	var targetOS, targetArch string
-	if values := opts.Matrix.Require["os"]; len(values) > 0 {
-		targetOS = values[0]
-	}
-	if values := opts.Matrix.Require["arch"]; len(values) > 0 {
-		targetArch = values[0]
-	}
-	if opts.RunTest && (targetOS != runtime.GOOS || targetArch != runtime.GOARCH) {
-		return nil, fmt.Errorf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
-	}
 	workspaceDir := opts.WorkspaceDir
 	if workspaceDir == "" {
 		var err error
@@ -124,7 +107,7 @@ func NewBuilder(opts Options) (*Builder, error) {
 	}
 	return &Builder{
 		store:        opts.Store,
-		matrix:       opts.Matrix,
+		matrix:       opts.MatrixStr,
 		runTest:      opts.RunTest,
 		stdout:       stdout,
 		stderr:       stderr,
@@ -247,296 +230,217 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 }
 
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
-	build := func(targets []*modules.Module, buildTarget *c.Target, runTest bool) ([]Result, error) {
-		builtResults := make(map[module.Version]classfile.BuildResult)
+	builtResults := make(map[module.Version]classfile.BuildResult)
 
-		// Identify the root target. By MVS convention (see constructBuildList
-		// and modules.Load), targets[0] is the main module requested by the
-		// caller; runTest semantics (fresh build + OnTest invocation) only
-		// apply to it.
-		//
-		// Root identity is tracked by (Path, Version) rather than pointer
-		// equality so the comparison survives any future refactor of
-		// constructBuildList that stops reusing *modules.Module pointers
-		// (e.g. parallel builds that clone module structs). The pair is
-		// unique in an MVS build list, so it is a safe identity key.
-		var rootID module.Version
-		if len(targets) > 0 {
-			rootID = module.Version{Path: targets[0].Path, Version: targets[0].Version}
+	// Identify the root target. By MVS convention (see constructBuildList
+	// and modules.Load), targets[0] is the main module requested by the
+	// caller; runTest semantics (fresh build + OnTest invocation) only
+	// apply to it.
+	//
+	// Root identity is tracked by (Path, Version) rather than pointer
+	// equality so the comparison survives any future refactor of
+	// constructBuildList that stops reusing *modules.Module pointers
+	// (e.g. parallel builds that clone module structs). The pair is
+	// unique in an MVS build list, so it is a safe identity key.
+	var rootID module.Version
+	if len(targets) > 0 {
+		rootID = module.Version{Path: targets[0].Path, Version: targets[0].Version}
+	}
+
+	var commandMiddleware execbroker.Middleware
+	if b.target != nil {
+		commandMiddleware = targetMiddleware(b.target)
+	}
+
+	build := func(mod *modules.Module) (Result, error) {
+		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
+		testThisMod := b.runTest && isRoot && mod.OnTest != nil
+
+		installDir, err := b.installDir(mod.Path, mod.Version)
+		if err != nil {
+			return Result{}, err
+		}
+		deps := b.resolveModTransitiveDeps(targets, mod)
+		modVer := module.Version{Path: mod.Path, Version: mod.Version}
+
+		// Consult the build cache. A hit means we already have the
+		// module's build metadata and its installDir is populated from a
+		// previous successful build.
+		entry, cacheHit, err := b.cache.Get(ctx, cache.Key{Module: modVer, Matrix: b.matrix})
+		if err != nil {
+			return Result{}, err
 		}
 
-		var commandMiddleware execbroker.Middleware
-		if buildTarget != nil {
-			commandMiddleware = targetMiddleware(buildTarget)
+		// Fast path: cache hit and no OnTest to run. Skip source clone
+		// and OnBuild entirely.
+		if cacheHit && !testThisMod {
+			return Result{Metadata: entry.Metadata, OutputDir: installDir}, nil
 		}
 
-		buildModule := func(mod *modules.Module) (Result, error) {
-			isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
-			testThisMod := runTest && isRoot && mod.OnTest != nil
+		// At this point we need to run OnBuild, OnTest, or both. All of
+		// them expect a source checkout and a prepared build context, so
+		// set those up uniformly regardless of cache state.
 
-			installDir, err := b.installDir(mod.Path, mod.Version)
-			if err != nil {
-				return Result{}, err
-			}
-			deps := b.resolveModTransitiveDeps(targets, mod)
-			modVer := module.Version{Path: mod.Path, Version: mod.Version}
+		// TODO(MeteorsLiu): Source cache dir (belongs in the vcs layer)
+		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
+		if err != nil {
+			return Result{}, err
+		}
+		defer os.RemoveAll(tmpSourceDir)
 
-			// Consult the build cache. A hit means we already have the
-			// module's build metadata and its installDir is populated from a
-			// previous successful build.
-			entry, cacheHit, err := b.cache.Get(ctx, cache.Key{Module: modVer, Matrix: b.matrix.Combinations()[0]})
-			if err != nil {
-				return Result{}, err
-			}
+		// Before we start to build, clone source to tmpSourceDir.
+		// TODO(MeteorsLiu): Support different code host
+		repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
+		if err != nil {
+			return Result{}, err
+		}
+		if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
+			return Result{}, err
+		}
 
-			// Fast path: cache hit and no OnTest to run. Skip source clone
-			// and OnBuild entirely.
-			if cacheHit && !testThisMod {
-				return Result{Metadata: entry.Metadata, OutputDir: installDir}, nil
-			}
+		if err := os.MkdirAll(installDir, 0o755); err != nil {
+			return Result{}, err
+		}
 
-			// At this point we need to run OnBuild, OnTest, or both. All of
-			// them expect a source checkout and a prepared build context, so
-			// set those up uniformly regardless of cache state.
+		getOutputDir := func(_ string, m module.Version) (string, error) {
+			return b.installDir(m.Path, m.Version)
+		}
+		project := &classfile.Project{Deps: deps, SourceFS: mod.FS.(fs.ReadFileFS)}
+		buildContext := classfile.NewContext(project, tmpSourceDir, installDir, b.matrix, getOutputDir)
 
-			// TODO(MeteorsLiu): Source cache dir (belongs in the vcs layer)
-			tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
-			if err != nil {
-				return Result{}, err
-			}
-			defer os.RemoveAll(tmpSourceDir)
+		// Inject results of already-built dependencies
+		for modVer, result := range builtResults {
+			buildContext.AddBuildResult(modVer, result)
+		}
 
-			// Before we start to build, clone source to tmpSourceDir.
-			// TODO(MeteorsLiu): Support different code host
-			repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
-			if err != nil {
-				return Result{}, err
-			}
-			if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
-				return Result{}, err
-			}
-
-			if err := os.MkdirAll(installDir, 0o755); err != nil {
-				return Result{}, err
-			}
-
-			getOutputDir := func(_ string, m module.Version) (string, error) {
-				return b.installDir(m.Path, m.Version)
-			}
-			project := &classfile.Project{Deps: deps, SourceFS: mod.FS.(fs.ReadFileFS)}
-			buildContext := classfile.NewContext(project, tmpSourceDir, installDir, b.matrix.Combinations()[0], getOutputDir)
-
-			// Inject results of already-built dependencies
-			for modVer, result := range builtResults {
-				buildContext.AddBuildResult(modVer, result)
-			}
-
-			var metadata string
-			if err := execbroker.Do(execbroker.Scope{
-				Dir:        tmpSourceDir,
-				Stdin:      os.Stdin,
-				Stdout:     b.stdout,
-				Stderr:     b.stderr,
-				Middleware: commandMiddleware,
-			}, func() error {
-				// Run OnBuild only on cache miss; reuse cached metadata otherwise.
-				if cacheHit {
-					metadata = entry.Metadata
-				} else {
-					if err := runFormulaHook(func() {
-						mod.OnBuild(buildContext)
-					}); err != nil {
-						return err
-					}
-					if len(buildContext.Errs) > 0 {
-						return errors.Join(buildContext.Errs...)
-					}
-					metadata = buildContext.Out.Metadata()
-				}
-
-				// Run OnTest (root only) against the just-built or cached
-				// artifacts, reusing the same build context so tests see a
-				// consistent environment either way.
-				if testThisMod {
-					if err := runFormulaHook(func() {
-						mod.OnTest(buildContext)
-					}); err != nil {
-						return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, err)
-					}
-					if len(buildContext.Errs) > 0 {
-						return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, buildContext.Errs.ToError())
-					}
-				}
-				return nil
-			}); err != nil {
-				return Result{}, err
-			}
-
-			// Save cache only on cache miss. A cache hit means the entry is
-			// already present and current; OnTest does not modify metadata.
-			if !cacheHit {
-				entry, err := b.cache.Put(ctx, cache.Key{Module: modVer, Matrix: b.matrix.Combinations()[0]}, os.DirFS(installDir), cache.Entry{
-					Metadata: metadata,
-					Deps:     deps,
-				})
-				if err != nil {
-					return Result{}, err
-				}
+		var metadata string
+		if err := execbroker.Do(execbroker.Scope{
+			Dir:        tmpSourceDir,
+			Stdin:      os.Stdin,
+			Stdout:     b.stdout,
+			Stderr:     b.stderr,
+			Middleware: commandMiddleware,
+		}, func() error {
+			// Run OnBuild only on cache miss; reuse cached metadata otherwise.
+			if cacheHit {
 				metadata = entry.Metadata
-			}
-
-			return Result{Metadata: metadata, OutputDir: installDir}, nil
-		}
-
-		var results []Result
-
-		buildList := b.constructBuildList(targets)
-		lockPaths := make([]string, 0, len(buildList))
-		for _, target := range buildList {
-			lockPaths = append(lockPaths, target.Path)
-		}
-		// A dependent keeps reading its dependencies' install directories after
-		// their own build steps return, so hold the whole graph until Build completes.
-		//
-		// Case 1 - Disjoint graphs:
-		// Request A builds libpng -> zlib and request B builds curl -> openssl.
-		// They lock different module paths and remain parallel.
-		//
-		// Case 2 - Overlapping graphs:
-		// Request A builds libpng -> zlib and request B builds freetype -> zlib.
-		// Because both graphs contain zlib, the later request waits for the earlier
-		// Build to finish, then reuses its published zlib artifact instead of observing
-		// a replaced install tree.
-		//
-		// Lock ordering:
-		// Use a stable order so overlapping graphs cannot deadlock. For example,
-		// X -> Y produces build order [Y, X], while another matrix with Y -> X produces
-		// [X, Y]. Locking in build order can leave each request holding one lock and
-		// waiting for the other; sorting makes both lock [X, Y].
-		sort.Strings(lockPaths)
-		unlocks := make([]func(), 0, len(lockPaths))
-		for _, path := range lockPaths {
-			unlock, err := b.store.LockModule(path)
-			if err != nil {
-				for i := len(unlocks) - 1; i >= 0; i-- {
-					unlocks[i]()
+			} else {
+				if err := runFormulaHook(func() {
+					mod.OnBuild(buildContext)
+				}); err != nil {
+					return err
 				}
-				return nil, err
+				if len(buildContext.Errs) > 0 {
+					return errors.Join(buildContext.Errs...)
+				}
+				metadata = buildContext.Out.Metadata()
 			}
-			unlocks = append(unlocks, unlock)
+
+			// Run OnTest (root only) against the just-built or cached
+			// artifacts, reusing the same build context so tests see a
+			// consistent environment either way.
+			if testThisMod {
+				if err := runFormulaHook(func() {
+					mod.OnTest(buildContext)
+				}); err != nil {
+					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, err)
+				}
+				if len(buildContext.Errs) > 0 {
+					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, buildContext.Errs.ToError())
+				}
+			}
+			return nil
+		}); err != nil {
+			return Result{}, err
 		}
-		defer func() {
+
+		// Save cache only on cache miss. A cache hit means the entry is
+		// already present and current; OnTest does not modify metadata.
+		if !cacheHit {
+			entry, err := b.cache.Put(ctx, cache.Key{Module: modVer, Matrix: b.matrix}, os.DirFS(installDir), cache.Entry{
+				Metadata: metadata,
+				Deps:     deps,
+			})
+			if err != nil {
+				return Result{}, err
+			}
+			metadata = entry.Metadata
+		}
+
+		return Result{Metadata: metadata, OutputDir: installDir}, nil
+	}
+
+	var results []Result
+
+	buildList := b.constructBuildList(targets)
+	lockPaths := make([]string, 0, len(buildList))
+	for _, target := range buildList {
+		lockPaths = append(lockPaths, target.Path)
+	}
+	// A dependent keeps reading its dependencies' install directories after
+	// their own build steps return, so hold the whole graph until Build completes.
+	//
+	// Case 1 - Disjoint graphs:
+	// Request A builds libpng -> zlib and request B builds curl -> openssl.
+	// They lock different module paths and remain parallel.
+	//
+	// Case 2 - Overlapping graphs:
+	// Request A builds libpng -> zlib and request B builds freetype -> zlib.
+	// Because both graphs contain zlib, the later request waits for the earlier
+	// Build to finish, then reuses its published zlib artifact instead of observing
+	// a replaced install tree.
+	//
+	// Lock ordering:
+	// Use a stable order so overlapping graphs cannot deadlock. For example,
+	// X -> Y produces build order [Y, X], while another matrix with Y -> X produces
+	// [X, Y]. Locking in build order can leave each request holding one lock and
+	// waiting for the other; sorting makes both lock [X, Y].
+	sort.Strings(lockPaths)
+	unlocks := make([]func(), 0, len(lockPaths))
+	for _, path := range lockPaths {
+		unlock, err := b.store.LockModule(path)
+		if err != nil {
 			for i := len(unlocks) - 1; i >= 0; i-- {
 				unlocks[i]()
 			}
-		}()
-
-		// Save current environment and restore it after OnBuild,
-		// that's because OnBuild may break environment
-		// TODO(MeteorsLiu): Switch to sandbox to run OnBuild
-		savedEnv := os.Environ()
-		defer func() {
-			os.Clearenv()
-			for _, env := range savedEnv {
-				k, v, _ := strings.Cut(env, "=")
-				os.Setenv(k, v)
-			}
-		}()
-
-		// TODO(MeteorsLiu): Parallel build
-		for _, target := range buildList {
-			result, err := buildModule(target)
-			if err != nil {
-				return nil, err
-			}
-
-			// Track result for downstream dependencies
-			modVer := module.Version{Path: target.Path, Version: target.Version}
-			br := classfile.BuildResult{}
-			if result.Metadata != "" {
-				br.SetMetadata(result.Metadata)
-			}
-			builtResults[modVer] = br
-
-			results = append(results, result)
+			return nil, err
 		}
-		return results, nil
+		unlocks = append(unlocks, unlock)
 	}
-
-	buildTarget := b.target
-	var targetOS, targetArch string
-	if values := b.matrix.Require["os"]; len(values) > 0 {
-		targetOS = values[0]
-	}
-	if values := b.matrix.Require["arch"]; len(values) > 0 {
-		targetArch = values[0]
-	}
-	// A caller-supplied target owns all target and sysroot preparation. Without
-	// one, cross builds use LLAR's default C target policy.
-	if len(targets) > 0 && buildTarget == nil && (targetOS != runtime.GOOS || targetArch != runtime.GOARCH) {
-		cSysroot, useCTarget := c.Sysroot(targetOS, targetArch)
-		if useCTarget {
-			var sysrootMods []*modules.Module
-			_, customLibc := b.matrix.Require["libc"]
-			if !customLibc && targets[0].Path != cSysroot.Path {
-				var err error
-				// modules.Load selects the sysroot Formula whose fromVer applies to
-				// cSysroot.Version; the sysroot graph remains separate from targets.
-				sysrootMods, err = modules.Load(ctx, cSysroot, modules.Options{
-					FormulaStore: b.store,
-					Matrix:       b.matrix,
-				})
-				if err != nil {
-					return nil, fmt.Errorf("failed to load sysroot %s@%s: %w", cSysroot.Path, cSysroot.Version, err)
-				}
-			}
-
-			targetMatrix := targetArch + "-" + targetOS
-			bootstrapToolchain, err := llvm.New(llvm.Config{OS: targetOS, Arch: targetArch})
-			if err != nil {
-				return nil, fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
-			}
-			bootstrapTarget, err := c.NewTarget(c.Config{
-				Matrix:    targetMatrix,
-				Toolchain: bootstrapToolchain.Toolchain,
-			})
-			if err != nil {
-				return nil, err
-			}
-			defer bootstrapTarget.Close()
-			buildTarget = bootstrapTarget
-
-			if len(sysrootMods) > 0 {
-				selectedSysroot := sysrootMods[0]
-				sysrootResults, err := build(sysrootMods, bootstrapTarget, false)
-				if err != nil {
-					return nil, fmt.Errorf("failed to build sysroot %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
-				}
-				metadata, err := ccmetadata.Parse(sysrootResults[len(sysrootResults)-1].Metadata)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse sysroot metadata for %s@%s: %w", selectedSysroot.Path, selectedSysroot.Version, err)
-				}
-				if metadata.Sysroot() == "" {
-					return nil, fmt.Errorf("sysroot metadata for %s@%s has no sysroot", selectedSysroot.Path, selectedSysroot.Version)
-				}
-
-				configuredToolchain, err := llvm.New(llvm.Config{OS: targetOS, Arch: targetArch, Sysroot: metadata.Sysroot()})
-				if err != nil {
-					return nil, fmt.Errorf("prepare C toolchain for %s: %w", targetMatrix, err)
-				}
-				configuredTarget, err := c.NewTarget(c.Config{
-					Matrix:    targetMatrix,
-					Toolchain: configuredToolchain.Toolchain,
-					Sysroot:   metadata.Sysroot(),
-				})
-				if err != nil {
-					return nil, err
-				}
-				defer configuredTarget.Close()
-				buildTarget = configuredTarget
-			}
+	defer func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
 		}
-	}
+	}()
 
-	return build(targets, buildTarget, b.runTest)
+	// Save current environment and restore it after OnBuild,
+	// that's because OnBuild may break environment
+	// TODO(MeteorsLiu): Switch to sandbox to run OnBuild
+	savedEnv := os.Environ()
+	defer func() {
+		os.Clearenv()
+		for _, env := range savedEnv {
+			k, v, _ := strings.Cut(env, "=")
+			os.Setenv(k, v)
+		}
+	}()
+
+	// TODO(MeteorsLiu): Parallel build
+	for _, target := range buildList {
+		result, err := build(target)
+		if err != nil {
+			return nil, err
+		}
+
+		// Track result for downstream dependencies
+		modVer := module.Version{Path: target.Path, Version: target.Version}
+		br := classfile.BuildResult{}
+		if result.Metadata != "" {
+			br.SetMetadata(result.Metadata)
+		}
+		builtResults[modVer] = br
+
+		results = append(results, result)
+	}
+	return results, nil
 }
