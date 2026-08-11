@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build-linux-arm64:
-    name: "Build zlib: Linux amd64 host to Linux arm64 target"
+    name: "Build zlib: Linux amd64 -> Linux arm64 (default/custom libc)"
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -78,7 +78,7 @@ jobs:
           git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
           git config --global url."file://$source_repo".insteadOf "https://github.com/bminor/glibc.git"
 
-      - name: Cross compile zlib
+      - name: Cross compile zlib with default sysroot
         run: |
           go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llar" ./cmd/llar
           "$RUNNER_TEMP/llar" make madler/zlib@v1.3.1 \
@@ -87,15 +87,35 @@ jobs:
             --output "$RUNNER_TEMP/zlib-linux-arm64" \
             --verbose
 
-      - name: Upload zlib artifact
+      - name: Cross compile zlib with Formula-managed libc
+        run: |
+          "$RUNNER_TEMP/llar" make madler/zlib@v1.3.1 \
+            --os linux \
+            --arch arm64 \
+            --require libc=glibc-2.24 \
+            --output "$RUNNER_TEMP/zlib-linux-arm64-custom-libc" \
+            --json \
+            --verbose \
+            > "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json"
+          grep -F '"path":"bminor/glibc","version":"glibc-2.24"' \
+            "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json"
+
+      - name: Upload default-sysroot zlib artifact
         uses: actions/upload-artifact@v4
         with:
           name: zlib-linux-arm64
           path: ${{ runner.temp }}/zlib-linux-arm64
           if-no-files-found: error
 
+      - name: Upload custom-libc zlib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zlib-linux-arm64-custom-libc
+          path: ${{ runner.temp }}/zlib-linux-arm64-custom-libc
+          if-no-files-found: error
+
   run-linux-arm64:
-    name: "Run zlib: Linux arm64 runner consumes Linux arm64 artifact"
+    name: "Run zlib: Linux arm64 (default/custom libc)"
     needs: build-linux-arm64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
@@ -103,13 +123,19 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
-      - name: Download zlib artifact
+      - name: Download default-sysroot zlib artifact
         uses: actions/download-artifact@v4
         with:
           name: zlib-linux-arm64
           path: ${{ runner.temp }}/zlib-linux-arm64
 
-      - name: Inspect, link, and run consumer
+      - name: Download custom-libc zlib artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zlib-linux-arm64-custom-libc
+          path: ${{ runner.temp }}/zlib-linux-arm64-custom-libc
+
+      - name: Inspect, link, and run default-sysroot consumer
         run: |
           lib="$RUNNER_TEMP/zlib-linux-arm64/lib/libz.a"
           member_dir="$RUNNER_TEMP/zlib-members"
@@ -130,6 +156,29 @@ jobs:
             -o "$consumer"
           ldd "$consumer" | tee "$RUNNER_TEMP/dynamic-libraries.txt"
           grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/dynamic-libraries.txt"
+          "$consumer"
+
+      - name: Inspect, link, and run custom-libc consumer
+        run: |
+          lib="$RUNNER_TEMP/zlib-linux-arm64-custom-libc/lib/libz.a"
+          member_dir="$RUNNER_TEMP/zlib-custom-libc-members"
+          consumer="$RUNNER_TEMP/zlib-custom-libc-consumer"
+
+          mkdir -p "$member_dir"
+          (
+            cd "$member_dir"
+            ar x "$lib" adler32.o
+          )
+          file "$member_dir/adler32.o" | tee "$RUNNER_TEMP/zlib-custom-libc-format.txt"
+          grep -F "ELF 64-bit LSB relocatable, ARM aarch64" "$RUNNER_TEMP/zlib-custom-libc-format.txt"
+
+          cc \
+            -I"$RUNNER_TEMP/zlib-linux-arm64-custom-libc/include" \
+            testdata/crosscompile-e2e/consumer.c \
+            "$lib" \
+            -o "$consumer"
+          ldd "$consumer" | tee "$RUNNER_TEMP/custom-libc-dynamic-libraries.txt"
+          grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/custom-libc-dynamic-libraries.txt"
           "$consumer"
 
   build-darwin-arm64:
