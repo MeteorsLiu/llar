@@ -60,12 +60,12 @@ func TestPrintlnScope(t *testing.T) {
 }
 
 func TestCommandMiddleware(t *testing.T) {
-	err := Do(Scope{Middleware: func(req Request) Request {
+	err := Do(Scope{Middleware: func(req Request) (Request, error) {
 		req.Name = "replacement"
 		req.Args = append([]string{"prefix"}, req.Args...)
 		req.Env = []string{"KEY=value"}
 		req.Dir = "/work"
-		return req
+		return req, nil
 	}}, func() error {
 		cmd := Command("original", "arg")
 		if got, want := cmd.Args, []string{"replacement", "prefix", "arg"}; !reflect.DeepEqual(got, want) {
@@ -78,6 +78,58 @@ func TestCommandMiddleware(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMiddlewareErrorStopsCommand(t *testing.T) {
+	want := errors.New("command rejected")
+	tests := []struct {
+		name string
+		run  func(*bytes.Buffer) error
+	}{
+		{
+			name: "Command",
+			run: func(output *bytes.Buffer) error {
+				cmd := Command(os.Args[0], "-test.run=TestExecBrokerHelperProcess")
+				cmd.Env = append(os.Environ(), "EXECBROKER_HELPER=executed")
+				cmd.Stdout = output
+				return cmd.Run()
+			},
+		},
+		{
+			name: "CommandContext",
+			run: func(output *bytes.Buffer) error {
+				cmd := CommandContext(context.Background(), os.Args[0], "-test.run=TestExecBrokerHelperProcess")
+				cmd.Env = append(os.Environ(), "EXECBROKER_HELPER=executed")
+				cmd.Stdout = output
+				return cmd.Run()
+			},
+		},
+		{
+			name: "Run",
+			run: func(output *bytes.Buffer) error {
+				cmd := exec.Command(os.Args[0], "-test.run=TestExecBrokerHelperProcess")
+				cmd.Env = append(os.Environ(), "EXECBROKER_HELPER=executed")
+				cmd.Stdout = output
+				return Run(cmd)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := Do(Scope{Middleware: func(req Request) (Request, error) {
+				return req, want
+			}}, func() error {
+				return tt.run(&output)
+			})
+			if !errors.Is(err, want) {
+				t.Fatalf("error = %v, want %v", err, want)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("command executed with output %q", output.String())
+			}
+		})
 	}
 }
 

@@ -26,8 +26,9 @@ type Request struct {
 	Stderr io.Writer
 }
 
-// Middleware may rewrite a command before execution.
-type Middleware func(Request) Request
+// Middleware may rewrite a command before execution. Returning an error
+// prevents the command from starting.
+type Middleware func(Request) (Request, error)
 
 // Scope supplies process-independent defaults for commands created while fn
 // runs. Custom fields already set on a command take precedence.
@@ -78,16 +79,22 @@ func Println(a ...any) (int, error) {
 
 // Command is the brokered equivalent of exec.Command.
 func Command(name string, args ...string) *exec.Cmd {
-	req := rewrite(Request{Name: name, Args: clone(args)})
+	req, err := rewrite(Request{Name: name, Args: clone(args)})
 	cmd := exec.Command(req.Name, req.Args...)
+	if err != nil {
+		cmd.Err = err
+	}
 	apply(cmd, req)
 	return cmd
 }
 
 // CommandContext is the brokered equivalent of exec.CommandContext.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
-	req := rewrite(Request{Name: name, Args: clone(args)})
+	req, err := rewrite(Request{Name: name, Args: clone(args)})
 	cmd := exec.CommandContext(ctx, req.Name, req.Args...)
+	if err != nil {
+		cmd.Err = err
+	}
 	apply(cmd, req)
 	return cmd
 }
@@ -101,7 +108,7 @@ func Run(cmd *exec.Cmd) error {
 		name = cmd.Args[0]
 		args = cmd.Args[1:]
 	}
-	req := rewrite(Request{
+	req, err := rewrite(Request{
 		Name:   name,
 		Args:   clone(args),
 		Env:    clone(cmd.Env),
@@ -110,6 +117,9 @@ func Run(cmd *exec.Cmd) error {
 		Stdout: cmd.Stdout,
 		Stderr: cmd.Stderr,
 	})
+	if err != nil {
+		return err
+	}
 	resolved := exec.Command(req.Name, req.Args...)
 	cmd.Path = resolved.Path
 	cmd.Args = resolved.Args
@@ -118,7 +128,7 @@ func Run(cmd *exec.Cmd) error {
 	return cmd.Run()
 }
 
-func rewrite(req Request) Request {
+func rewrite(req Request) (Request, error) {
 	req.Args = clone(req.Args)
 	req.Env = clone(req.Env)
 
@@ -143,14 +153,19 @@ func rewrite(req Request) Request {
 			req.Stderr = scope.Stderr
 		}
 		if scope.Middleware != nil {
-			req = scope.Middleware(req)
+			var err error
+			req, err = scope.Middleware(req)
+			if err != nil {
+				scopeMu.RUnlock()
+				return req, err
+			}
 		}
 	}
 	scopeMu.RUnlock()
 
 	req.Args = clone(req.Args)
 	req.Env = clone(req.Env)
-	return req
+	return req, nil
 }
 
 func apply(cmd *exec.Cmd, req Request) {
