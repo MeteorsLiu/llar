@@ -949,3 +949,44 @@ func TestIntegration_LoadWithEmptyVersion(t *testing.T) {
 	}
 	t.Logf("resolved version: %s", modules[0].Version)
 }
+
+func TestIntegration_LoadTaglessRepositoryAtHead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	const formulaRef = "57f92f7d1ac9673cd4c2e81d6d9777bd9340f7c9"
+	ctx := context.Background()
+
+	sourceRepo, err := vcs.NewRepo("github.com/rxi/log.c")
+	if err != nil {
+		t.Fatalf("create source repo failed: %v", err)
+	}
+	tags, err := sourceRepo.Tags(ctx)
+	if err != nil {
+		t.Fatalf("list source tags failed: %v", err)
+	}
+	if len(tags) != 0 {
+		t.Fatalf("source repository has tags %v, want no tags", tags)
+	}
+	head, err := sourceRepo.Latest(ctx)
+	if err != nil {
+		t.Fatalf("resolve source HEAD failed: %v", err)
+	}
+
+	formulaRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarhub")
+	if err != nil {
+		t.Fatalf("create formula repo failed: %v", err)
+	}
+	store := repo.New(t.TempDir(), &pinnedRepo{Repo: formulaRepo, ref: formulaRef})
+	modules, err := Load(ctx, module.Version{Path: "rxi/log.c"}, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load tagless repository failed: %v", err)
+	}
+	if len(modules) != 1 {
+		t.Fatalf("loaded modules = %d, want 1", len(modules))
+	}
+	if modules[0].Version != head {
+		t.Fatalf("resolved version = %q, want HEAD %q", modules[0].Version, head)
+	}
+}
