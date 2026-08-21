@@ -688,9 +688,11 @@ func TestMakeLocal_JSONOutput(t *testing.T) {
 	var got struct {
 		Path    string `json:"path"`
 		Version string `json:"version"`
+		Dir     string `json:"dir"`
 		Deps    []struct {
 			Path    string `json:"path"`
 			Version string `json:"version"`
+			Dir     string `json:"dir"`
 		} `json:"deps"`
 		Metadata string `json:"metadata"`
 	}
@@ -703,6 +705,10 @@ func TestMakeLocal_JSONOutput(t *testing.T) {
 	if got.Version != "1.0.0" {
 		t.Fatalf("version = %q, want %q", got.Version, "1.0.0")
 	}
+	rootDir := filepath.Join(workspaceDir, fmt.Sprintf("test/jsonroot@1.0.0-%s", matrixStr))
+	if got.Dir != rootDir {
+		t.Fatalf("dir = %q, want %q", got.Dir, rootDir)
+	}
 	if got.Metadata != "-ljsonroot" {
 		t.Fatalf("metadata = %q, want %q", got.Metadata, "-ljsonroot")
 	}
@@ -711,6 +717,10 @@ func TestMakeLocal_JSONOutput(t *testing.T) {
 	}
 	if got.Deps[0].Path != "test/jsondep" || got.Deps[0].Version != "1.2.3" {
 		t.Fatalf("deps[0] = %+v, want test/jsondep@1.2.3", got.Deps[0])
+	}
+	depDir := filepath.Join(workspaceDir, fmt.Sprintf("test/jsondep@1.2.3-%s", matrixStr))
+	if got.Deps[0].Dir != depDir {
+		t.Fatalf("deps[0].dir = %q, want %q", got.Deps[0].Dir, depDir)
 	}
 }
 

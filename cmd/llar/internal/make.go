@@ -171,9 +171,35 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 
 	if len(results) > 0 {
 		main := results[len(results)-1]
+		deps := artifactDeps(mods)
+		mainPath, err := module.EscapePath(mods[0].Path)
+		if err != nil {
+			return err
+		}
+		mainSuffix := fmt.Sprintf("%s@%s-%s", mainPath, mods[0].Version, matrixStr)
+		mainDir := filepath.Clean(main.OutputDir)
+		if !strings.HasSuffix(mainDir, mainSuffix) {
+			return fmt.Errorf("unexpected build output directory %q for %s@%s", mainDir, mods[0].Path, mods[0].Version)
+		}
+		workspaceDir := strings.TrimSuffix(mainDir, mainSuffix)
+		workspaceDir = strings.TrimSuffix(workspaceDir, string(filepath.Separator))
+		outputDeps := make([]moduleOutputDep, 0, len(deps))
+		for _, dep := range deps {
+			depPath, err := module.EscapePath(dep.Path)
+			if err != nil {
+				return err
+			}
+			outputDeps = append(outputDeps, moduleOutputDep{
+				Module: dep,
+				OutputDir: filepath.Join(
+					workspaceDir,
+					fmt.Sprintf("%s@%s-%s", depPath, dep.Version, matrixStr),
+				),
+			})
+		}
 		result := moduleOutputResult{
 			Module:    module.Version{Path: mods[0].Path, Version: mods[0].Version},
-			Deps:      artifactDeps(mods),
+			Deps:      outputDeps,
 			Metadata:  main.Metadata,
 			OutputDir: main.OutputDir,
 		}

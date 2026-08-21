@@ -140,6 +140,10 @@ func TestInstallCommand(t *testing.T) {
 	if result.Path != "test/root" || result.Version != "v1.0.0" {
 		t.Fatalf("result = %+v, want test/root@v1.0.0", result)
 	}
+	installDir := filepath.Join(workspaceDir, "test/root@v1.0.0-testarch-testos|ON")
+	if result.Dir != installDir {
+		t.Fatalf("result dir = %q, want %q", result.Dir, installDir)
+	}
 	if _, err := os.Stat(output); err != nil {
 		t.Fatalf("output artifact: %v", err)
 	}
@@ -156,7 +160,6 @@ func TestInstallCommand(t *testing.T) {
 	if archiveInfo.Metadata != "-I"+filepath.Join(extracted, "include")+" -lroot" {
 		t.Fatalf("archive metadata = %+v", archiveInfo)
 	}
-	installDir := filepath.Join(workspaceDir, "test/root@v1.0.0-testarch-testos|ON")
 	assertInstallFile(t, filepath.Join(installDir, "include", "root.h"), "root")
 
 	directoryOutput := filepath.Join(t.TempDir(), "root-out")
@@ -312,7 +315,12 @@ func TestInstallDownloadsRootAndDependencies(t *testing.T) {
 	if result.Module != (module.Version{Path: "test/root", Version: "v1.0.0"}) {
 		t.Fatalf("result module = %+v", result.Module)
 	}
-	if len(result.Deps) != 1 || result.Deps[0] != (module.Version{Path: "test/dep", Version: "v1.2.3"}) {
+	depDir := filepath.Join(workspaceDir, fmt.Sprintf("test/dep@v1.2.3-%s", matrixStr))
+	rootDir := filepath.Join(workspaceDir, fmt.Sprintf("test/root@v1.0.0-%s", matrixStr))
+	if result.OutputDir != rootDir {
+		t.Fatalf("result output dir = %q, want %q", result.OutputDir, rootDir)
+	}
+	if len(result.Deps) != 1 || result.Deps[0].Module != (module.Version{Path: "test/dep", Version: "v1.2.3"}) || result.Deps[0].OutputDir != depDir {
 		t.Fatalf("result deps = %+v", result.Deps)
 	}
 	if result.Metadata != "-I"+filepath.Join(result.OutputDir, "include")+" -lroot" {
@@ -325,8 +333,6 @@ func TestInstallDownloadsRootAndDependencies(t *testing.T) {
 		t.Fatalf("llard artifact requests = %d, want one", artifactRequests)
 	}
 
-	depDir := filepath.Join(workspaceDir, fmt.Sprintf("test/dep@v1.2.3-%s", matrixStr))
-	rootDir := filepath.Join(workspaceDir, fmt.Sprintf("test/root@v1.0.0-%s", matrixStr))
 	assertInstallFile(t, filepath.Join(depDir, "lib", "libdep.a"), "dep")
 	assertInstallFile(t, filepath.Join(rootDir, "include", "root.h"), "root")
 	assertInstallCache(t, workspaceDir, "test/dep", "v1.2.3", matrixStr, "-L"+filepath.Join(depDir, "lib")+" -ldep")
@@ -355,8 +361,11 @@ func TestInstallDownloadsRootAndDependencies(t *testing.T) {
 	if err := json.Unmarshal(jsonOutput.Bytes(), &jsonResult); err != nil {
 		t.Fatal(err)
 	}
-	if jsonResult.Path != "test/root" || jsonResult.Version != "v1.0.0" || len(jsonResult.Deps) != 1 {
+	if jsonResult.Path != "test/root" || jsonResult.Version != "v1.0.0" || jsonResult.Dir != rootDir || len(jsonResult.Deps) != 1 {
 		t.Fatalf("JSON result = %+v", jsonResult)
+	}
+	if jsonResult.Deps[0].Path != "test/dep" || jsonResult.Deps[0].Version != "v1.2.3" || jsonResult.Deps[0].Dir != depDir {
+		t.Fatalf("JSON dependency = %+v", jsonResult.Deps[0])
 	}
 
 }
@@ -420,7 +429,7 @@ func TestInstallSkipsCachedArtifacts(t *testing.T) {
 	if result.Module != (module.Version{Path: "test/root", Version: "v1.0.0"}) {
 		t.Fatalf("result module = %+v", result.Module)
 	}
-	if len(result.Deps) != 1 || result.Deps[0] != (module.Version{Path: "test/dep", Version: "v1.2.3"}) {
+	if len(result.Deps) != 1 || result.Deps[0].Module != (module.Version{Path: "test/dep", Version: "v1.2.3"}) || result.Deps[0].OutputDir != depDir {
 		t.Fatalf("result deps = %+v", result.Deps)
 	}
 	if result.Metadata != "-I"+filepath.Join(result.OutputDir, "include")+" -lroot" {

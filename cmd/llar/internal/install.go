@@ -142,7 +142,7 @@ func install(ctx context.Context, progress io.Writer, serviceURL, arg string, ma
 	matrixStr := matrix.Combinations()[0]
 
 	var rootResult moduleOutputResult
-	deps := make([]module.Version, 0, len(messages)-1)
+	deps := make([]moduleOutputDep, 0, len(messages)-1)
 	for _, message := range messages {
 		parsed, err := url.Parse(message.ID)
 		if err != nil {
@@ -184,7 +184,7 @@ func install(ctx context.Context, progress io.Writer, serviceURL, arg string, ma
 				OutputDir: installDir,
 			}
 		} else {
-			deps = append(deps, mod)
+			deps = append(deps, moduleOutputDep{Module: mod, OutputDir: installDir})
 		}
 	}
 	rootResult.Deps = deps
