@@ -102,6 +102,9 @@ func TestLatestVersion_NoTags(t *testing.T) {
 	if !strings.Contains(err.Error(), "no tags found") {
 		t.Fatalf("error = %v, want contains %q", err, "no tags found")
 	}
+	if !errors.Is(err, errNoTags) {
+		t.Fatalf("error = %v, want errNoTags", err)
+	}
 }
 
 func TestLatestVersion_TagsError(t *testing.T) {
@@ -262,6 +265,26 @@ func TestLoad_EmptyVersion_LatestVersionTagsError(t *testing.T) {
 	_, err := Load(context.Background(), main, Options{FormulaStore: store})
 	if err == nil {
 		t.Fatal("expected latestVersion tags error")
+	}
+}
+
+func TestLoad_EmptyVersion_NoTagsFallsBackToMinimumFormulaVersion(t *testing.T) {
+	fakeGitDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeGitDir, "git"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", fakeGitDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	store := setupTestStore(t, "testdata/load")
+	modules, err := Load(context.Background(), module.Version{Path: "towner/standalone"}, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(modules) != 1 {
+		t.Fatalf("loaded modules = %d, want 1", len(modules))
+	}
+	if modules[0].Version != "1.0.0" {
+		t.Fatalf("main version = %q, want %q", modules[0].Version, "1.0.0")
 	}
 }
 

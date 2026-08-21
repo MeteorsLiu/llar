@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -18,6 +19,8 @@ import (
 
 	classfile "github.com/goplus/llar/formula"
 )
+
+var errNoTags = errors.New("no tags found")
 
 func validateModulePath(modPath string) error {
 	if modPath == "" {
@@ -69,7 +72,7 @@ func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparato
 		return "", err
 	}
 	if len(tags) == 0 {
-		return "", fmt.Errorf("failed to retrieve the latest version: no tags found")
+		return "", fmt.Errorf("failed to retrieve the latest version: %w", errNoTags)
 	}
 	max := slices.MaxFunc(tags, func(a, b string) int {
 		return comparator(module.Version{modPath, a}, module.Version{modPath, b})
@@ -184,7 +187,13 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		}
 		latest, err := latestVersion(ctx, main.Path, latestRepo, cmp)
 		if err != nil {
-			return nil, err
+			if !errors.Is(err, errNoTags) {
+				return nil, err
+			}
+			latest, err = mainMod.findMinFromVer(cmp)
+			if err != nil {
+				return nil, err
+			}
 		}
 		main.Version = latest
 	}

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -241,6 +242,22 @@ func TestFormulaModule_FindMaxFromVer(t *testing.T) {
 	}
 	if path == "" {
 		t.Error("path is empty")
+	}
+}
+
+func TestFormulaModule_FindMinFromVer(t *testing.T) {
+	fsys := os.DirFS("testdata/DaveGamble/cJSON")
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
+
+	cmp := func(v1, v2 module.Version) int {
+		return strings.Compare(v2.Version, v1.Version)
+	}
+	fromVer, err := mod.findMinFromVer(cmp)
+	if err != nil {
+		t.Fatalf("findMinFromVer() failed: %v", err)
+	}
+	if fromVer != "v2.0.0" {
+		t.Errorf("fromVer = %q, want %q", fromVer, "v2.0.0")
 	}
 }
 
