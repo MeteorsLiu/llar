@@ -130,36 +130,6 @@ func (m *formulaModule) findMaxFromVer(mod module.Version, compare func(v1, v2 m
 	return maxFromVer, formulaPath, nil
 }
 
-// findMinFromVer finds the lowest fromVer among the module's formula files.
-func (m *formulaModule) findMinFromVer(compare func(v1, v2 module.Version) int) (minFromVer string, err error) {
-	err = fs.WalkDir(m.fsys, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !strings.HasSuffix(path, defaultFormulaSuffix) {
-			return nil
-		}
-
-		fromVer, err := fromVerOf(m.fsys.(fs.ReadFileFS), path)
-		if err != nil {
-			return err
-		}
-		fromVerMod := module.Version{Path: m.modPath, Version: fromVer}
-		if minFromVer == "" || compare(fromVerMod, module.Version{Path: m.modPath, Version: minFromVer}) < 0 {
-			minFromVer = fromVer
-		}
-		return nil
-	})
-
-	if err != nil {
-		return "", err
-	}
-	if minFromVer == "" {
-		return "", fmt.Errorf("no formula found for %s", m.modPath)
-	}
-	return minFromVer, nil
-}
-
 // fromVerOf extracts the fromVer value from a formula file by parsing its AST.
 func fromVerOf(fsys fs.ReadFileFS, formulaPath string) (string, error) {
 	content, err := fsys.ReadFile(formulaPath)
