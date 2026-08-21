@@ -116,6 +116,7 @@ func (c *formulaContext) moduleOf(ctx context.Context, modPath string) (*formula
 		return nil, err
 	}
 	fm := newFormulaModule(fs, modPath)
+	fm.matrix = c.matrix
 	actual, _ := c.moduleCache.LoadOrStore(modPath, fm)
 	return actual.(*formulaModule), nil
 }
@@ -130,7 +131,7 @@ func (c *formulaContext) loadDeps(ctx context.Context, mod module.Version) (deps
 	if err != nil {
 		return nil, err
 	}
-	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f, c.matrix)
+	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f)
 }
 
 // convertToModules converts a list of module.Version into loaded Module structs.
@@ -146,7 +147,6 @@ func (c *formulaContext) convertToModules(ctx context.Context, modList []module.
 		if err != nil {
 			return nil, err
 		}
-		injectMatrix(f, c.matrix)
 		module := &Module{
 			Formula: f,
 			FS:      thisMod.fsys,
@@ -193,7 +193,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	if err != nil {
 		return nil, err
 	}
-	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula, context.matrix)
+	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula)
 	if err != nil {
 		return nil, err
 	}
@@ -288,14 +288,11 @@ func runFormulaHook(fn func()) (err error) {
 // resolveDeps resolves the dependencies for a formula.
 // It first tries to get dependencies from the OnRequire callback,
 // then falls back to parsing versions.json if no dependencies are found.
-func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula, matrix classfile.Matrix) ([]module.Version, error) {
+func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula) ([]module.Version, error) {
 	if err := validateModulePath(mod.Path); err != nil {
 		return nil, err
 	}
 
-	// XGo formulas read the selected matrix through target.require/options.
-	// Inject before filter and onRequire so both hooks see the same target.
-	injectMatrix(frla, matrix)
 	if frla.Filter != nil {
 		var supported bool
 		if err := runFormulaHook(func() {

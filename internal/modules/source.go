@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/goplus/ixgo/xgobuild"
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/gnu"
@@ -28,6 +29,7 @@ const defaultComparatorSuffix = "_cmp.gox"
 type formulaModule struct {
 	fsys       fs.FS
 	modPath    string
+	matrix     classfile.Matrix
 	comparator func() (func(v1, v2 module.Version) int, error)
 
 	mu       sync.Mutex
@@ -82,7 +84,9 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 	defer m.mu.Unlock()
 
 	if f, ok := m.formulas[fromVer]; ok {
-		return formula.Clone(f), nil
+		clone := formula.Clone(f)
+		injectMatrix(clone, m.matrix)
+		return clone, nil
 	}
 	f, err := formula.LoadFS(m.fsys.(fs.ReadFileFS), formulaPath)
 
@@ -90,7 +94,9 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 		return nil, err
 	}
 	m.formulas[fromVer] = f
-	return formula.Clone(f), nil
+	clone := formula.Clone(f)
+	injectMatrix(clone, m.matrix)
+	return clone, nil
 }
 
 // findMaxFromVer finds the formula file with the highest fromVer that is <= the target version.

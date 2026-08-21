@@ -91,7 +91,7 @@ func TestResolveDeps_NoOnRequire_DepsFromVersionsJson(t *testing.T) {
 	frla := loadTestFormula(t, "testdata/load/towner/mainmod", "towner/mainmod", "1.0.0")
 	mod := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestResolveDeps_NoOnRequire_NoDeps(t *testing.T) {
 	frla := loadTestFormula(t, "testdata/load/towner/leafmod", "towner/leafmod", "1.0.0")
 	mod := module.Version{Path: "towner/leafmod", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestResolveDeps_VersionNotInDepsTable(t *testing.T) {
 	// Version 9.9.9 doesn't exist in versions.json deps table
 	mod := module.Version{Path: "towner/mainmod", Version: "9.9.9"}
 
-	deps, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestResolveDeps_WithOnRequire_EchoOnly_FallbackToVersionsJson(t *testing.T)
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestResolveDeps_WithOnRequire_AddsDeps(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withdeps").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withdeps", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestResolveDeps_WithOnRequire_EmptyVersionFallback(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/reqnover").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/reqnover", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestResolveDeps_WithOnRequire_UnknownDepDropped(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/reqdrop").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/reqdrop", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -468,6 +468,28 @@ func TestLoad_InjectsTargetBeforeFilterAndOnRequire(t *testing.T) {
 	mainMod.Formula.OnBuild(buildCtx)
 	if got := buildCtx.Out.Metadata(); got != "-ltargetreq-linux-openssl" {
 		t.Fatalf("OnBuild metadata = %q, want %q", got, "-ltargetreq-linux-openssl")
+	}
+}
+
+func TestFormulaContext_AtInjectsMatrix(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	formulaCtx := newFormulaContext(store.ModuleFS, classfile.Matrix{
+		Require: map[string][]string{"os": {"linux"}},
+	})
+
+	mod, err := formulaCtx.moduleOf(context.Background(), "towner/targetreq")
+	if err != nil {
+		t.Fatalf("moduleOf failed: %v", err)
+	}
+	f, err := mod.at("1.0.0")
+	if err != nil {
+		t.Fatalf("at failed: %v", err)
+	}
+
+	var deps classfile.ModuleDeps
+	f.OnRequire(&classfile.Project{}, &deps)
+	if got := len(deps.Deps()); got != 1 {
+		t.Fatalf("OnRequire deps = %d, want 1", got)
 	}
 }
 
