@@ -1,0 +1,11 @@
+import "os"
+
+id "test/env"
+
+fromVer "v1.0.0"
+
+onBuild ctx => {
+	echo os.getenv("FORMULA_ENV_TEST")
+	os.setenv("FORMULA_ENV_TEST", "formula")!
+	echo os.getenv("FORMULA_ENV_TEST")
+}

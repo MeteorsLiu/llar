@@ -236,6 +236,120 @@ func TestDoRestoresNestedScope(t *testing.T) {
 	}
 }
 
+func TestScopedGetenvAndSetenv(t *testing.T) {
+	key := "EXECBROKER_SCOPED_ENV_TEST"
+	if err := os.Setenv(key, "process"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Unsetenv(key) })
+
+	err := Do(Scope{}, func() error {
+		if got := Getenv(key); got != "process" {
+			t.Fatalf("Getenv before Setenv = %q, want process", got)
+		}
+		if err := Setenv(key, "scoped"); err != nil {
+			return err
+		}
+		if got := Getenv(key); got != "scoped" {
+			t.Fatalf("Getenv after Setenv = %q, want scoped", got)
+		}
+		if got := os.Getenv(key); got != "process" {
+			t.Fatalf("process environment = %q, want process", got)
+		}
+		var got string
+		prefix := key + "="
+		for _, entry := range Command("command").Env {
+			if len(entry) >= len(prefix) && entry[:len(prefix)] == prefix {
+				got = entry[len(prefix):]
+			}
+		}
+		if got != "scoped" {
+			t.Fatalf("command environment = %q, want scoped", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Getenv(key); got != "process" {
+		t.Fatalf("Getenv after scope = %q, want process", got)
+	}
+}
+
+func TestScopedEnvironmentRestoresNestedScope(t *testing.T) {
+	key := "EXECBROKER_NESTED_ENV_TEST"
+	err := Do(Scope{Env: []string{key + "=outer"}}, func() error {
+		if got := Getenv(key); got != "outer" {
+			t.Fatalf("outer Getenv = %q, want outer", got)
+		}
+		if err := Do(Scope{Env: []string{key + "=inner"}}, func() error {
+			if got := Getenv(key); got != "inner" {
+				t.Fatalf("inner Getenv = %q, want inner", got)
+			}
+			return Setenv(key, "inner-updated")
+		}); err != nil {
+			return err
+		}
+		if got := Getenv(key); got != "outer" {
+			t.Fatalf("restored Getenv = %q, want outer", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScopedEnvironmentIsGoroutineLocal(t *testing.T) {
+	key := "EXECBROKER_GOROUTINE_ENV_TEST"
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	results := make(chan string, 2)
+
+	for _, value := range []string{"one", "two"} {
+		value := value
+		go func() {
+			_ = Do(Scope{}, func() error {
+				if err := Setenv(key, value); err != nil {
+					return err
+				}
+				ready <- struct{}{}
+				<-start
+				results <- Getenv(key)
+				return nil
+			})
+		}()
+	}
+	for range 2 {
+		<-ready
+	}
+	close(start)
+
+	got := map[string]bool{<-results: true, <-results: true}
+	if !got["one"] || !got["two"] {
+		t.Fatalf("goroutine-scoped values = %v, want one and two", got)
+	}
+}
+
+func TestScopedSetenvRejectsInvalidValues(t *testing.T) {
+	for _, test := range []struct {
+		label string
+		name  string
+		value string
+	}{
+		{label: "empty name", name: "", value: "value"},
+		{label: "equals in name", name: "bad=name", value: "value"},
+		{label: "nul in name", name: "bad\x00name", value: "value"},
+		{label: "nul in value", name: "name", value: "bad\x00value"},
+	} {
+		t.Run(test.label, func(t *testing.T) {
+			if err := Do(Scope{}, func() error { return Setenv(test.name, test.value) }); err == nil {
+				t.Fatalf("Setenv(%q, %q) error = nil", test.name, test.value)
+			}
+		})
+	}
+}
+
 func TestDoReturnsError(t *testing.T) {
 	want := errors.New("failed")
 	if err := Do(Scope{}, func() error { return want }); !errors.Is(err, want) {

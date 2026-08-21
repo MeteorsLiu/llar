@@ -66,6 +66,46 @@ func Do(scope Scope, fn func() error) error {
 	return fn()
 }
 
+// Getenv returns the value of key from the active command scope. Without a
+// scope, it has the same behavior as os.Getenv.
+func Getenv(key string) string {
+	id := goid.Get()
+	scopeMu.RLock()
+	scope, ok := scopes[id]
+	if ok && scope.Env != nil {
+		value := envValue(scope.Env, key)
+		scopeMu.RUnlock()
+		return value
+	}
+	scopeMu.RUnlock()
+	return os.Getenv(key)
+}
+
+// Setenv sets key in the active command scope. The first scoped write copies
+// the process environment so later commands inherit the update without
+// changing the process-wide environment. Without a scope, it has the same
+// behavior as os.Setenv.
+func Setenv(key, value string) error {
+	if err := validateEnv(key, value); err != nil {
+		return err
+	}
+
+	id := goid.Get()
+	scopeMu.Lock()
+	defer scopeMu.Unlock()
+
+	scope, ok := scopes[id]
+	if !ok {
+		return os.Setenv(key, value)
+	}
+	if scope.Env == nil {
+		scope.Env = os.Environ()
+	}
+	scope.Env = setEnv(scope.Env, key, value)
+	scopes[id] = scope
+	return nil
+}
+
 // Println writes to the stdout configured for the active scope.
 func Println(a ...any) (int, error) {
 	w := io.Writer(os.Stdout)
@@ -181,4 +221,42 @@ func clone(in []string) []string {
 		return nil
 	}
 	return append([]string(nil), in...)
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if len(env[i]) >= len(prefix) && env[i][:len(prefix)] == prefix {
+			return env[i][len(prefix):]
+		}
+	}
+	return ""
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i := range env {
+		if len(env[i]) >= len(prefix) && env[i][:len(prefix)] == prefix {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func validateEnv(key, value string) error {
+	if key == "" {
+		return fmt.Errorf("invalid environment variable name")
+	}
+	for i := 0; i < len(key); i++ {
+		if key[i] == '=' || key[i] == 0 {
+			return fmt.Errorf("invalid environment variable name %q", key)
+		}
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] == 0 {
+			return fmt.Errorf("invalid environment variable value for %q", key)
+		}
+	}
+	return nil
 }

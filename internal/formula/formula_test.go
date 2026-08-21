@@ -196,3 +196,41 @@ func TestFormulaPrintUsesBrokerScope(t *testing.T) {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
+
+func TestFormulaEnvironmentUsesBrokerScope(t *testing.T) {
+	const key = "FORMULA_ENV_TEST"
+	t.Setenv(key, "process")
+
+	f, err := loadFS(os.DirFS("testdata/formula").(fs.ReadFileFS), "env_llar.gox")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	err = execbroker.Do(execbroker.Scope{Stdout: &stdout}, func() error {
+		f.OnBuild(&formulapkg.Context{})
+		if got := os.Getenv(key); got != "process" {
+			t.Fatalf("process environment = %q, want process", got)
+		}
+		var got string
+		prefix := key + "="
+		for _, entry := range execbroker.Command("command").Env {
+			if len(entry) >= len(prefix) && entry[:len(prefix)] == prefix {
+				got = entry[len(prefix):]
+			}
+		}
+		if got != "formula" {
+			t.Fatalf("command environment = %q, want formula", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "process\nformula\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+	if got := os.Getenv(key); got != "process" {
+		t.Fatalf("process environment after scope = %q, want process", got)
+	}
+}

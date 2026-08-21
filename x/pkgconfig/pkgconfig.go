@@ -17,10 +17,10 @@ func Use(root string) {
 	if _, err := os.Stat(dir); err != nil {
 		return
 	}
-	if current := os.Getenv("PKG_CONFIG_PATH"); current != "" {
+	if current := execbroker.Getenv("PKG_CONFIG_PATH"); current != "" {
 		dir += string(os.PathListSeparator) + current
 	}
-	os.Setenv("PKG_CONFIG_PATH", dir)
+	_ = execbroker.Setenv("PKG_CONFIG_PATH", dir)
 }
 
 // Lookup returns the compiler and linker flags for name.
