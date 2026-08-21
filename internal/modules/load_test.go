@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -454,6 +455,48 @@ func TestLoad_InjectsTargetBeforeFilterAndOnRequire(t *testing.T) {
 	}
 	if findModule(mods, "towner/depmod") == nil {
 		t.Fatalf("missing towner/depmod in build list")
+	}
+
+	mainMod := findModule(mods, main.Path)
+	if mainMod == nil || mainMod.Formula == nil {
+		t.Fatalf("missing formula for %s", main.Path)
+	}
+	if mainMod.Formula.OnBuild == nil {
+		t.Fatal("targetreq OnBuild is nil")
+	}
+	buildCtx := classfile.NewContext(&classfile.Project{}, "", "", "", nil)
+	mainMod.Formula.OnBuild(buildCtx)
+	if got := buildCtx.Out.Metadata(); got != "-ltargetreq-linux-openssl" {
+		t.Fatalf("OnBuild metadata = %q, want %q", got, "-ltargetreq-linux-openssl")
+	}
+}
+
+func TestConvertToModules_InjectsSelectedMatrix(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	matrix := classfile.Matrix{
+		Require: map[string][]string{"os": {"linux"}},
+		Options: map[string][]string{"ssl": {"securetransport"}},
+	}
+	formulaCtx := newFormulaContext(store.ModuleFS, matrix)
+
+	mods, err := formulaCtx.convertToModules(context.Background(), []module.Version{
+		{Path: "towner/targetreq", Version: "1.0.0"},
+	})
+	if err != nil {
+		t.Fatalf("convertToModules failed: %v", err)
+	}
+	if len(mods) != 1 {
+		t.Fatalf("modules len = %d, want 1", len(mods))
+	}
+
+	formulaElem := reflect.ValueOf(mods[0].Formula).Elem()
+	structElem := valueOf(formulaElem, "structElem").(reflect.Value)
+	target := valueOf(structElem, "target").(classfile.Matrix)
+	if got := target.Require["os"]; !slices.Equal(got, []string{"linux"}) {
+		t.Errorf("target.require[os] = %v, want [linux]", got)
+	}
+	if got := target.Options["ssl"]; !slices.Equal(got, []string{"securetransport"}) {
+		t.Errorf("target.options[ssl] = %v, want [securetransport]", got)
 	}
 }
 

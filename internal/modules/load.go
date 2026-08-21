@@ -146,6 +146,7 @@ func (c *formulaContext) convertToModules(ctx context.Context, modList []module.
 		if err != nil {
 			return nil, err
 		}
+		injectMatrix(f, c.matrix)
 		module := &Module{
 			Formula: f,
 			FS:      thisMod.fsys,
