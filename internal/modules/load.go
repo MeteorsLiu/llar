@@ -115,8 +115,7 @@ func (c *formulaContext) moduleOf(ctx context.Context, modPath string) (*formula
 	if err != nil {
 		return nil, err
 	}
-	fm := newFormulaModule(fs, modPath)
-	fm.matrix = c.matrix
+	fm := newFormulaModule(fs, modPath, c.matrix)
 	actual, _ := c.moduleCache.LoadOrStore(modPath, fm)
 	return actual.(*formulaModule), nil
 }

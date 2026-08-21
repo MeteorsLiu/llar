@@ -54,7 +54,7 @@ func setupTestStore(t *testing.T, testdataDir string) repo.Store {
 func loadTestFormula(t *testing.T, moduleDir, modPath, version string) *formula.Formula {
 	t.Helper()
 	fsys := os.DirFS(moduleDir)
-	mod := newFormulaModule(fsys, modPath)
+	mod := newFormulaModule(fsys, modPath, classfile.Matrix{})
 	f, err := mod.at(version)
 	if err != nil {
 		t.Fatalf("failed to load formula for %s@%s: %v", modPath, version, err)

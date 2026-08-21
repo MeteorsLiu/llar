@@ -39,10 +39,11 @@ type formulaModule struct {
 // newFormulaModule creates a new formulaModule for the given module.
 // The fsys should be rooted at the module's directory (already positioned by the caller).
 // The modPath is used for constructing module.Version in version comparisons.
-func newFormulaModule(fsys fs.FS, modPath string) *formulaModule {
+func newFormulaModule(fsys fs.FS, modPath string, matrix classfile.Matrix) *formulaModule {
 	m := &formulaModule{
 		fsys:     fsys,
 		modPath:  modPath,
+		matrix:   matrix,
 		formulas: make(map[string]*formula.Formula),
 	}
 	m.comparator = sync.OnceValues(func() (func(v1, v2 module.Version) int, error) {
