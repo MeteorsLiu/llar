@@ -48,4 +48,15 @@ func init() {
 			"Unsetenv":  reflect.ValueOf(execbroker.Unsetenv),
 		},
 	})
+	ixgoapi.RegisterPackage(&ixgoapi.Package{
+		Name: "syscall",
+		Path: "syscall",
+		Funcs: map[string]reflect.Value{
+			"Clearenv": reflect.ValueOf(execbroker.Clearenv),
+			"Environ":  reflect.ValueOf(execbroker.Environ),
+			"Getenv":   reflect.ValueOf(execbroker.LookupEnv),
+			"Setenv":   reflect.ValueOf(execbroker.Setenv),
+			"Unsetenv": reflect.ValueOf(execbroker.Unsetenv),
+		},
+	})
 }

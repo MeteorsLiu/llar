@@ -30,6 +30,26 @@ func TestBrokerOSPackageMergePreservesExports(t *testing.T) {
 	}
 }
 
+func TestBrokerSyscallPackageMergePreservesExports(t *testing.T) {
+	pkg, ok := ixgoapi.LookupPackage("syscall")
+	if !ok {
+		t.Fatal("syscall package is not registered")
+	}
+	if _, ok := pkg.Funcs["Read"]; !ok {
+		t.Fatal("syscall package lost existing function Read")
+	}
+	for name, want := range map[string]uintptr{
+		"Getenv":   reflect.ValueOf(execbroker.LookupEnv).Pointer(),
+		"Setenv":   reflect.ValueOf(execbroker.Setenv).Pointer(),
+		"Unsetenv": reflect.ValueOf(execbroker.Unsetenv).Pointer(),
+	} {
+		fn, ok := pkg.Funcs[name]
+		if !ok || fn.Pointer() != want {
+			t.Fatalf("syscall.%s was not replaced by the broker implementation", name)
+		}
+	}
+}
+
 func TestBrokerOSEnvironmentUsesScope(t *testing.T) {
 	key := "IXGO_BROKER_ENV_TEST"
 	if err := os.Setenv(key, "process"); err != nil {

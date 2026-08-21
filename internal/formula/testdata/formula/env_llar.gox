@@ -1,4 +1,5 @@
 import "os"
+import "syscall"
 
 id "test/env"
 
@@ -17,6 +18,10 @@ onBuild ctx => {
 			echo "environment"
 		}
 	}
+	syscall.setenv("FORMULA_ENV_TEST", "syscall")!
+	value, ok = syscall.getenv("FORMULA_ENV_TEST")
+	echo value
+	echo ok
 	os.unsetenv("FORMULA_ENV_TEST")!
 	echo os.getenv("FORMULA_ENV_TEST")
 	os.clearenv()
