@@ -276,6 +276,61 @@ func TestScopedGetenvAndSetenv(t *testing.T) {
 	}
 }
 
+func TestScopedEnvironmentAPIs(t *testing.T) {
+	key := "EXECBROKER_ENV_APIS_TEST"
+	if err := os.Setenv(key, "process"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Unsetenv(key) })
+
+	err := Do(Scope{}, func() error {
+		if got, ok := LookupEnv(key); got != "process" || !ok {
+			t.Fatalf("LookupEnv before Setenv = %q, %v; want process, true", got, ok)
+		}
+		if got := ExpandEnv("$" + key); got != "process" {
+			t.Fatalf("ExpandEnv before Setenv = %q, want process", got)
+		}
+		if err := Setenv(key, "scoped"); err != nil {
+			return err
+		}
+		if got, ok := LookupEnv(key); got != "scoped" || !ok {
+			t.Fatalf("LookupEnv after Setenv = %q, %v; want scoped, true", got, ok)
+		}
+		if got := ExpandEnv("${" + key + "}"); got != "scoped" {
+			t.Fatalf("ExpandEnv after Setenv = %q, want scoped", got)
+		}
+		if got := envValue(Environ(), key); got != "scoped" {
+			t.Fatalf("Environ value = %q, want scoped", got)
+		}
+		if err := Unsetenv(key); err != nil {
+			return err
+		}
+		if _, ok := LookupEnv(key); ok {
+			t.Fatal("LookupEnv after Unsetenv = present, want absent")
+		}
+		if err := Setenv(key, "scoped-again"); err != nil {
+			return err
+		}
+		Clearenv()
+		if got := len(Environ()); got != 0 {
+			t.Fatalf("Environ after Clearenv = %d entries, want zero", got)
+		}
+		if got := Getenv(key); got != "" {
+			t.Fatalf("Getenv after Clearenv = %q, want empty", got)
+		}
+		if got := os.Getenv(key); got != "process" {
+			t.Fatalf("process environment = %q, want process", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv(key); got != "process" {
+		t.Fatalf("process environment after scope = %q, want process", got)
+	}
+}
+
 func TestScopedEnvironmentRestoresNestedScope(t *testing.T) {
 	key := "EXECBROKER_NESTED_ENV_TEST"
 	err := Do(Scope{Env: []string{key + "=outer"}}, func() error {

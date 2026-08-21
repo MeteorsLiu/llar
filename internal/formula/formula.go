@@ -83,8 +83,6 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	// Formula types remain cached after loading, so later interpreters must not
 	// reset the dynamic method slots used by earlier types.
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
-	ctx.RegisterExternal("os.Getenv", execbroker.Getenv)
-	ctx.RegisterExternal("os.Setenv", execbroker.Setenv)
 	ctx.RegisterExternal("os/exec.Command", execbroker.Command)
 	ctx.RegisterExternal("os/exec.CommandContext", execbroker.CommandContext)
 	ctx.RegisterExternal("fmt.Println", execbroker.Println)

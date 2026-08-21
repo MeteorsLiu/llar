@@ -219,15 +219,15 @@ func TestFormulaEnvironmentUsesBrokerScope(t *testing.T) {
 				got = entry[len(prefix):]
 			}
 		}
-		if got != "formula" {
-			t.Fatalf("command environment = %q, want formula", got)
+		if got != "formula-again" {
+			t.Fatalf("command environment = %q, want formula-again", got)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := stdout.String(), "process\nformula\n"; got != want {
+	if got, want := stdout.String(), "process\nprocess\ntrue\nformula\nformula\nenvironment\n\n\nformula-again\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 	if got := os.Getenv(key); got != "process" {
