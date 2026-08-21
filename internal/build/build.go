@@ -273,7 +273,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// set those up uniformly regardless of cache state.
 
 		// TODO(MeteorsLiu): Source cache dir (belongs in the vcs layer)
-		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
+		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), strings.ReplaceAll(mod.Version, "/", "-")))
 		if err != nil {
 			return Result{}, err
 		}

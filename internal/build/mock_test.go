@@ -11,6 +11,7 @@ import (
 // mockRepo implements vcs.Repo interface for testing.
 type mockRepo struct {
 	testdataDir string
+	syncRef     *string
 }
 
 func (m *mockRepo) Tags(ctx context.Context) ([]string, error) {
@@ -26,6 +27,10 @@ func (m *mockRepo) At(ref, localDir string) fs.FS {
 }
 
 func (m *mockRepo) Sync(ctx context.Context, ref, path, destDir string) error {
+	if m.syncRef != nil {
+		*m.syncRef = ref
+	}
+
 	// Strip "github.com/" prefix if present
 	path = strings.TrimPrefix(path, "github.com/")
 
