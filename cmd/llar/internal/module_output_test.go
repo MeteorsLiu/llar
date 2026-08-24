@@ -64,3 +64,15 @@ func TestWriteModuleOutputArchiveIncludesDependencies(t *testing.T) {
 		t.Fatalf("metadata deps = %+v, want test/dep@v1.2.3", info.Deps)
 	}
 }
+
+func TestWriteModuleOutputReturnsStatError(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.WriteFile(parent, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(parent, "root.tar.gz")
+	if err := writeModuleOutput(moduleOutputResult{}, dest); err == nil {
+		t.Fatal("writeModuleOutput() succeeded below a regular file")
+	}
+}
