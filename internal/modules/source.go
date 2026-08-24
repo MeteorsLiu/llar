@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/goplus/ixgo/xgobuild"
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/gnu"
@@ -28,6 +29,7 @@ const defaultComparatorSuffix = "_cmp.gox"
 type formulaModule struct {
 	fsys       fs.FS
 	modPath    string
+	matrix     classfile.Matrix
 	comparator func() (func(v1, v2 module.Version) int, error)
 
 	mu       sync.Mutex
@@ -37,10 +39,11 @@ type formulaModule struct {
 // newFormulaModule creates a new formulaModule for the given module.
 // The fsys should be rooted at the module's directory (already positioned by the caller).
 // The modPath is used for constructing module.Version in version comparisons.
-func newFormulaModule(fsys fs.FS, modPath string) *formulaModule {
+func newFormulaModule(fsys fs.FS, modPath string, matrix classfile.Matrix) *formulaModule {
 	m := &formulaModule{
 		fsys:     fsys,
 		modPath:  modPath,
+		matrix:   matrix,
 		formulas: make(map[string]*formula.Formula),
 	}
 	m.comparator = sync.OnceValues(func() (func(v1, v2 module.Version) int, error) {
@@ -82,7 +85,9 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 	defer m.mu.Unlock()
 
 	if f, ok := m.formulas[fromVer]; ok {
-		return formula.Clone(f), nil
+		clone := formula.Clone(f)
+		injectMatrix(clone, m.matrix)
+		return clone, nil
 	}
 	f, err := formula.LoadFS(m.fsys.(fs.ReadFileFS), formulaPath)
 
@@ -90,7 +95,9 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 		return nil, err
 	}
 	m.formulas[fromVer] = f
-	return formula.Clone(f), nil
+	clone := formula.Clone(f)
+	injectMatrix(clone, m.matrix)
+	return clone, nil
 }
 
 // findMaxFromVer finds the formula file with the highest fromVer that is <= the target version.

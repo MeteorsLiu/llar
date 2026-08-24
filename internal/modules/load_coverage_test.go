@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
@@ -140,7 +139,7 @@ func TestResolveDeps_InvalidModulePath(t *testing.T) {
 	mod := module.Version{Path: "", Version: "1.0.0"}
 	frla := &formula.Formula{ModPath: "", FromVer: "1.0.0"}
 
-	_, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	_, err := resolveDeps(mod, modFS, frla)
 	if err == nil {
 		t.Fatal("expected error for invalid module path")
 	}
@@ -232,7 +231,7 @@ func TestResolveDeps_InvalidDependencyPathFromVersions(t *testing.T) {
 	mod := module.Version{Path: "towner/main", Version: "1.0.0"}
 	frla := loadTestFormula(t, "testdata/load/towner/standalone", "towner/standalone", "1.0.0")
 
-	_, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	_, err := resolveDeps(mod, modFS, frla)
 	if err == nil {
 		t.Fatal("expected error for invalid dependency path")
 	}
@@ -246,7 +245,7 @@ func TestResolveDeps_MissingVersionsFile(t *testing.T) {
 	mod := module.Version{Path: "towner/badcmp", Version: "1.0.0"}
 	frla := loadTestFormula(t, "testdata/load/towner/standalone", "towner/standalone", "1.0.0")
 
-	_, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	_, err := resolveDeps(mod, modFS, frla)
 	if err == nil {
 		t.Fatal("expected error for missing versions.json")
 	}
@@ -316,7 +315,7 @@ func TestResolveDeps_OnRequireMkdirTempError(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "1.0.0"}
 
-	_, err := resolveDeps(mod, modFS, frla, classfile.Matrix{})
+	_, err := resolveDeps(mod, modFS, frla)
 	if err == nil {
 		t.Fatal("expected MkdirTemp error")
 	}

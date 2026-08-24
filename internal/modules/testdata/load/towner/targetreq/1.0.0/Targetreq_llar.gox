@@ -21,5 +21,8 @@ onRequire (proj, deps) => {
 }
 
 onBuild ctx => {
-	ctx.setMetadata "-ltargetreq"
+	if slices.contains(target.require["os"], "linux") &&
+		slices.contains(target.options["ssl"], "openssl") {
+		ctx.setMetadata "-ltargetreq-linux-openssl"
+	}
 }
