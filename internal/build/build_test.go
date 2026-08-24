@@ -820,6 +820,9 @@ func TestBuild_PrePopulatedCache(t *testing.T) {
 	if results[0].Metadata != "-lPRECACHED" {
 		t.Errorf("metadata = %q, want %q (from pre-populated cache)", results[0].Metadata, "-lPRECACHED")
 	}
+	if results[0].Module != main {
+		t.Errorf("module = %+v, want %+v", results[0].Module, main)
+	}
 }
 
 func TestBuild_CacheWrittenCorrectly(t *testing.T) {
@@ -827,7 +830,10 @@ func TestBuild_CacheWrittenCorrectly(t *testing.T) {
 	b := setupBuilder(t, store, "amd64-linux")
 
 	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-	loadAndBuild(t, b, store, main)
+	results, _ := loadAndBuild(t, b, store, main)
+	if len(results) != 1 || results[0].Module != main {
+		t.Errorf("results = %+v, want module %s@%s", results, main.Path, main.Version)
+	}
 
 	// Load the cache file and verify its content
 	cache, err := b.loadCache("test/liba")

@@ -171,9 +171,16 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 
 	if len(results) > 0 {
 		main := results[len(results)-1]
+		outputDeps := make([]moduleOutputDep, 0, len(results)-1)
+		for _, result := range results[:len(results)-1] {
+			outputDeps = append(outputDeps, moduleOutputDep{
+				Module:    result.Module,
+				OutputDir: result.OutputDir,
+			})
+		}
 		result := moduleOutputResult{
-			Module:    module.Version{Path: mods[0].Path, Version: mods[0].Version},
-			Deps:      artifactDeps(mods),
+			Module:    main.Module,
+			Deps:      outputDeps,
 			Metadata:  main.Metadata,
 			OutputDir: main.OutputDir,
 		}
@@ -215,19 +222,4 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 		}
 	}
 	return
-}
-
-func artifactDeps(mods []*modules.Module) []module.Version {
-	if len(mods) <= 1 {
-		return nil
-	}
-	deps := make([]module.Version, 0, len(mods)-1)
-	main := mods[0]
-	for _, mod := range mods[1:] {
-		if mod.Path == main.Path && mod.Version == main.Version {
-			continue
-		}
-		deps = append(deps, module.Version{Path: mod.Path, Version: mod.Version})
-	}
-	return deps
 }

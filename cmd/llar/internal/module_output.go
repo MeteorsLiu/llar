@@ -15,18 +15,25 @@ import (
 type moduleJSONDep struct {
 	Path    string `json:"path"`
 	Version string `json:"version"`
+	Dir     string `json:"dir"`
 }
 
 type moduleJSONResult struct {
 	Path     string          `json:"path"`
 	Version  string          `json:"version"`
+	Dir      string          `json:"dir"`
 	Deps     []moduleJSONDep `json:"deps,omitempty"`
 	Metadata string          `json:"metadata"`
 }
 
+type moduleOutputDep struct {
+	Module    module.Version
+	OutputDir string
+}
+
 type moduleOutputResult struct {
 	Module    module.Version
-	Deps      []module.Version
+	Deps      []moduleOutputDep
 	Metadata  string
 	OutputDir string
 }
@@ -42,11 +49,16 @@ func writeModuleResult(output io.Writer, result moduleOutputResult, jsonOutput b
 
 	deps := make([]moduleJSONDep, 0, len(result.Deps))
 	for _, dep := range result.Deps {
-		deps = append(deps, moduleJSONDep{Path: dep.Path, Version: dep.Version})
+		deps = append(deps, moduleJSONDep{
+			Path:    dep.Module.Path,
+			Version: dep.Module.Version,
+			Dir:     dep.OutputDir,
+		})
 	}
 	return json.NewEncoder(output).Encode(moduleJSONResult{
 		Path:     result.Module.Path,
 		Version:  result.Module.Version,
+		Dir:      result.OutputDir,
 		Deps:     deps,
 		Metadata: result.Metadata,
 	})
@@ -71,7 +83,11 @@ func writeModuleOutput(result moduleOutputResult, dest string) error {
 	if !strings.HasSuffix(dest, ".zip") && !strings.HasSuffix(dest, ".tar.gz") {
 		return os.CopyFS(dest, os.DirFS(result.OutputDir))
 	}
-	body, err := metadata.Encode(metadata.Info{Metadata: result.Metadata, Deps: result.Deps}, result.OutputDir)
+	deps := make([]module.Version, 0, len(result.Deps))
+	for _, dep := range result.Deps {
+		deps = append(deps, dep.Module)
+	}
+	body, err := metadata.Encode(metadata.Info{Metadata: result.Metadata, Deps: deps}, result.OutputDir)
 	if err != nil {
 		return err
 	}
