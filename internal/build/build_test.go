@@ -569,6 +569,33 @@ func TestBuild_EmptyTargets(t *testing.T) {
 	}
 }
 
+func TestBuild_SlashInVersion(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	wantRef := "refs/heads/feature/foo"
+	var gotRef string
+	sourceRepo := newMockRepo(filepath.Join(testSourceDir, "test/liba"))
+	sourceRepo.syncRef = &gotRef
+	b.newRepo = func(string) (vcs.Repo, error) {
+		return sourceRepo, nil
+	}
+	root := &modules.Module{
+		Formula: &internalformula.Formula{
+			OnBuild: func(*classfile.Context) {},
+		},
+		FS:      os.DirFS(testFormulaDir),
+		Path:    "test/liba",
+		Version: wantRef,
+	}
+
+	if _, err := b.Build(context.Background(), []*modules.Module{root}); err != nil {
+		t.Fatalf("Build() failed for slash-containing version: %v", err)
+	}
+	if gotRef != wantRef {
+		t.Fatalf("repo.Sync ref = %q, want %q", gotRef, wantRef)
+	}
+}
+
 func TestBuild_RecoversFormulaHookPanic(t *testing.T) {
 	wantErr := errors.New("hook failed")
 	tests := []struct {

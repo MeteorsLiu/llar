@@ -319,7 +319,7 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula,
 		// TODO(MeteorsLiu): Design source cache dir
 		// In the most common case, onRequire only read one file like CMakelist.txt, etc.
 		// So missing cache here is acceptable.
-		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
+		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), strings.ReplaceAll(mod.Version, "/", "-")))
 		if err != nil {
 			return nil, err
 		}

@@ -187,6 +187,16 @@ func TestResolveDeps_WithOnRequire_EchoOnly_FallbackToVersionsJson(t *testing.T)
 	}
 }
 
+func TestResolveDeps_OnRequire_SlashInVersion(t *testing.T) {
+	frla := loadTestFormula(t, "testdata/load/towner/withreq", "towner/withreq", "1.0.0")
+	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
+	mod := module.Version{Path: "towner/withreq", Version: "refs/heads/feature/foo"}
+
+	if _, err := resolveDeps(mod, modFS, frla, classfile.Matrix{}); err != nil {
+		t.Fatalf("resolveDeps failed for slash-containing version: %v", err)
+	}
+}
+
 func TestResolveDeps_WithOnRequire_AddsDeps(t *testing.T) {
 	frla := loadTestFormula(t, "testdata/load/towner/withdeps", "towner/withdeps", "1.0.0")
 	modFS := os.DirFS("testdata/load/towner/withdeps").(fs.ReadFileFS)
