@@ -171,34 +171,15 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 
 	if len(results) > 0 {
 		main := results[len(results)-1]
-		deps := artifactDeps(mods)
-		mainPath, err := module.EscapePath(mods[0].Path)
-		if err != nil {
-			return err
-		}
-		mainSuffix := fmt.Sprintf("%s@%s-%s", mainPath, mods[0].Version, matrixStr)
-		mainDir := filepath.Clean(main.OutputDir)
-		if !strings.HasSuffix(mainDir, mainSuffix) {
-			return fmt.Errorf("unexpected build output directory %q for %s@%s", mainDir, mods[0].Path, mods[0].Version)
-		}
-		workspaceDir := strings.TrimSuffix(mainDir, mainSuffix)
-		workspaceDir = strings.TrimSuffix(workspaceDir, string(filepath.Separator))
-		outputDeps := make([]moduleOutputDep, 0, len(deps))
-		for _, dep := range deps {
-			depPath, err := module.EscapePath(dep.Path)
-			if err != nil {
-				return err
-			}
+		outputDeps := make([]moduleOutputDep, 0, len(results)-1)
+		for _, result := range results[:len(results)-1] {
 			outputDeps = append(outputDeps, moduleOutputDep{
-				Module: dep,
-				OutputDir: filepath.Join(
-					workspaceDir,
-					fmt.Sprintf("%s@%s-%s", depPath, dep.Version, matrixStr),
-				),
+				Module:    result.Module,
+				OutputDir: result.OutputDir,
 			})
 		}
 		result := moduleOutputResult{
-			Module:    module.Version{Path: mods[0].Path, Version: mods[0].Version},
+			Module:    main.Module,
 			Deps:      outputDeps,
 			Metadata:  main.Metadata,
 			OutputDir: main.OutputDir,
@@ -241,19 +222,4 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 		}
 	}
 	return
-}
-
-func artifactDeps(mods []*modules.Module) []module.Version {
-	if len(mods) <= 1 {
-		return nil
-	}
-	deps := make([]module.Version, 0, len(mods)-1)
-	main := mods[0]
-	for _, mod := range mods[1:] {
-		if mod.Path == main.Path && mod.Version == main.Version {
-			continue
-		}
-		deps = append(deps, module.Version{Path: mod.Path, Version: mod.Version})
-	}
-	return deps
 }

@@ -32,6 +32,7 @@ type Builder struct {
 }
 
 type Result struct {
+	Module    module.Version
 	Metadata  string
 	OutputDir string
 }
@@ -265,7 +266,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// Fast path: cache hit and no OnTest to run. Skip source clone
 		// and OnBuild entirely.
 		if cacheHit && !testThisMod {
-			return Result{Metadata: entry.Metadata, OutputDir: installDir}, nil
+			return Result{Module: modVer, Metadata: entry.Metadata, OutputDir: installDir}, nil
 		}
 
 		// At this point we need to run OnBuild, OnTest, or both. All of
@@ -357,7 +358,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			metadata = entry.Metadata
 		}
 
-		return Result{Metadata: metadata, OutputDir: installDir}, nil
+		return Result{Module: modVer, Metadata: metadata, OutputDir: installDir}, nil
 	}
 
 	var results []Result

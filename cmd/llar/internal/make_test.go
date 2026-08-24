@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -175,33 +174,6 @@ func TestNewRemoteStore(t *testing.T) {
 	}
 	if store == nil {
 		t.Fatal("newRemoteStore() returned nil")
-	}
-}
-
-func TestArtifactDepsSkipsMainModule(t *testing.T) {
-	mods := []*modules.Module{
-		{Path: "owner/main", Version: "v1.0.0"},
-		{Path: "dep/a", Version: "v1.1.0"},
-		{Path: "owner/main", Version: "v1.0.0"},
-		{Path: "dep/b", Version: "v1.2.0"},
-	}
-
-	got := artifactDeps(mods)
-	want := []module.Version{
-		{Path: "dep/a", Version: "v1.1.0"},
-		{Path: "dep/b", Version: "v1.2.0"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("artifactDeps = %+v, want %+v", got, want)
-	}
-}
-
-func TestArtifactDepsStandalone(t *testing.T) {
-	if got := artifactDeps(nil); got != nil {
-		t.Fatalf("artifactDeps(nil) = %+v, want nil", got)
-	}
-	if got := artifactDeps([]*modules.Module{{Path: "owner/main", Version: "v1.0.0"}}); got != nil {
-		t.Fatalf("artifactDeps(single) = %+v, want nil", got)
 	}
 }
 
