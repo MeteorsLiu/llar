@@ -8,7 +8,8 @@
 
 [![Test](https://github.com/goplus/llar/actions/workflows/go.yml/badge.svg)](https://github.com/goplus/llar/actions/workflows/go.yml)
 [![codecov](https://codecov.io/gh/goplus/llar/branch/main/graph/badge.svg)](https://codecov.io/gh/goplus/llar)
-[![Language](https://img.shields.io/badge/language-XGo-blue.svg)](https://github.com/goplus/xgo)
+[![GoDoc](https://pkg.go.dev/badge/github.com/xgo-dev/llar.svg)](https://pkg.go.dev/github.com/xgo-dev/llar)
+[![XGo](https://img.shields.io/badge/project-XGo-blue.svg)](https://github.com/goplus/xgo)
 
 LLAR is a cloud-based multi-language package manager built with [XGo](https://github.com/goplus/xgo). It resolves dependencies, downloads source code, and builds libraries from source using declarative formulas.
 
