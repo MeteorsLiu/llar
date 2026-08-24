@@ -724,6 +724,53 @@ func TestMakeLocal_JSONOutput(t *testing.T) {
 	}
 }
 
+func TestBuildModuleReturnsOutputPackagingError(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	store := repo.New(formulaDir, &noopVCSRepo{})
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	sourceRoot := t.TempDir()
+	sourceRepo := filepath.Join(sourceRoot, "liba.git")
+	sourceWork := filepath.Join(sourceRoot, "work")
+	runGit("init", "--bare", sourceRepo)
+	runGit("init", sourceWork)
+	runGit("-C", sourceWork, "config", "user.email", "test@example.com")
+	runGit("-C", sourceWork, "config", "user.name", "llar test")
+	if err := os.WriteFile(filepath.Join(sourceWork, "source.txt"), []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("-C", sourceWork, "add", "source.txt")
+	runGit("-C", sourceWork, "commit", "-m", "initial")
+	runGit("-C", sourceWork, "tag", "1.0.0")
+	runGit("-C", sourceWork, "push", sourceRepo, "1.0.0")
+
+	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	runGit("config", "--file", gitConfig,
+		fmt.Sprintf("url.file://%s.insteadOf", sourceRepo),
+		"https://github.com/test/liba.git")
+	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
+
+	blockedParent := filepath.Join(t.TempDir(), "parent")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalOutput := makeOutput
+	makeOutput = filepath.Join(blockedParent, "liba.zip")
+	t.Cleanup(func() { makeOutput = originalOutput })
+
+	_, _, restoreStreams := captureProcessStreams(t)
+	defer restoreStreams()
+	if err := buildModule(context.Background(), store, "test/liba", "1.0.0", computeMatrix(), false); err == nil || !strings.Contains(err.Error(), "failed to write output") {
+		t.Fatalf("buildModule() error = %v, want output packaging error", err)
+	}
+}
+
 func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	formulaDir := setupLocalFormulas(t)
 	store := repo.New(formulaDir, &noopVCSRepo{})

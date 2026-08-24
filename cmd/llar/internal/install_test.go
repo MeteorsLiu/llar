@@ -174,6 +174,46 @@ func TestInstallCommand(t *testing.T) {
 	assertInstallFile(t, filepath.Join(directoryOutput, "include", "root.h"), "root")
 }
 
+func TestInstallCommandReturnsOutputPackagingError(t *testing.T) {
+	workspaceDir := isolatedWorkspaceDir(t)
+	query := url.Values{"arch": {runtime.GOARCH}, "os": {runtime.GOOS}}.Encode()
+	rootArchive := makeInstallArtifact(t, ".zip", "include/root.h", "root", "/build/root", "-lroot", nil)
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/artifacts/test/root":
+			w.Header().Set("Content-Type", "application/x-cmdjsonl")
+			writeInstallCommand(t, w, "artifact", map[string]any{
+				"id": "test/root@v1.0.0?" + query, "type": "zip", "url": server.URL + "/root.zip",
+			})
+		case "/root.zip":
+			_, _ = w.Write(rootArchive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	redirectDefaultHTTPClient(t, server)
+
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.WriteFile(parent, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(parent, "root.zip")
+	_, _, err := runInstallCmd(t,
+		"--output", dest,
+		"--os", runtime.GOOS, "--arch", runtime.GOARCH,
+		"test/root",
+	)
+	if err == nil || !strings.Contains(err.Error(), "failed to write output") {
+		t.Fatalf("llar install error = %v, want output packaging error", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, "test/root@v1.0.0-"+runtime.GOARCH+"-"+runtime.GOOS)); err != nil {
+		t.Fatalf("install cache missing after output error: %v", err)
+	}
+}
+
 func TestInstallCommandReturnsLlardError(t *testing.T) {
 	isolatedWorkspaceDir(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
