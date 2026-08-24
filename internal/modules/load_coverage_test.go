@@ -51,14 +51,16 @@ func (f fakeFile) Read(_ []byte) (int, error) { return 0, io.EOF }
 func (f fakeFile) Close() error               { return nil }
 
 type mockLatestRepo struct {
-	tags    []string
-	tagsErr error
+	tags      []string
+	tagsErr   error
+	latest    string
+	latestErr error
 }
 
 var _ vcs.Repo = (*mockLatestRepo)(nil)
 
 func (m *mockLatestRepo) Tags(context.Context) ([]string, error) { return m.tags, m.tagsErr }
-func (m *mockLatestRepo) Latest(context.Context) (string, error) { return "", nil }
+func (m *mockLatestRepo) Latest(context.Context) (string, error) { return m.latest, m.latestErr }
 func (m *mockLatestRepo) At(ref, localDir string) fs.FS          { return os.DirFS(localDir) }
 func (m *mockLatestRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	return nil
@@ -90,17 +92,32 @@ func TestLatestVersion_SelectsMaxByComparator(t *testing.T) {
 	}
 }
 
-func TestLatestVersion_NoTags(t *testing.T) {
-	repo := &mockLatestRepo{tags: []string{}}
+func TestLatestVersion_NoTagsUsesLatestRef(t *testing.T) {
+	repo := &mockLatestRepo{latest: "deadbeef"}
 
-	cmp := func(v1, v2 module.Version) int { return strings.Compare(v1.Version, v2.Version) }
-
-	_, err := latestVersion(context.Background(), "towner/leafmod", repo, cmp)
-	if err == nil {
-		t.Fatal("expected error for no tags")
+	cmp := func(v1, v2 module.Version) int {
+		t.Fatalf("comparator called for no-tag repository: %v vs %v", v1, v2)
+		return 0
 	}
-	if !strings.Contains(err.Error(), "no tags found") {
-		t.Fatalf("error = %v, want contains %q", err, "no tags found")
+
+	got, err := latestVersion(context.Background(), "towner/leafmod", repo, cmp)
+	if err != nil {
+		t.Fatalf("latestVersion failed: %v", err)
+	}
+	if got != "deadbeef" {
+		t.Fatalf("latestVersion = %q, want %q", got, "deadbeef")
+	}
+}
+
+func TestLatestVersion_LatestError(t *testing.T) {
+	repo := &mockLatestRepo{latestErr: errors.New("forced latest error")}
+
+	_, err := latestVersion(context.Background(), "towner/leafmod", repo, func(module.Version, module.Version) int { return 0 })
+	if err == nil {
+		t.Fatal("expected latest error")
+	}
+	if !strings.Contains(err.Error(), "forced latest error") {
+		t.Fatalf("error = %v, want contains %q", err, "forced latest error")
 	}
 }
 
@@ -262,6 +279,27 @@ func TestLoad_EmptyVersion_LatestVersionTagsError(t *testing.T) {
 	_, err := Load(context.Background(), main, Options{FormulaStore: store})
 	if err == nil {
 		t.Fatal("expected latestVersion tags error")
+	}
+}
+
+func TestLoad_EmptyVersion_NoTagsUsesHeadRef(t *testing.T) {
+	fakeGitDir := t.TempDir()
+	fakeGit := "#!/bin/sh\nif [ \"$3\" = \"HEAD\" ]; then\n  printf 'deadbeef\\tHEAD\\n'\nfi\n"
+	if err := os.WriteFile(filepath.Join(fakeGitDir, "git"), []byte(fakeGit), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", fakeGitDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	store := setupTestStore(t, "testdata/load")
+	modules, err := Load(context.Background(), module.Version{Path: "towner/standalone"}, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(modules) != 1 {
+		t.Fatalf("loaded modules = %d, want 1", len(modules))
+	}
+	if modules[0].Version != "deadbeef" {
+		t.Fatalf("main version = %q, want %q", modules[0].Version, "deadbeef")
 	}
 }
 

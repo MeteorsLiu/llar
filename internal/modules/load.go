@@ -69,7 +69,7 @@ func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparato
 		return "", err
 	}
 	if len(tags) == 0 {
-		return "", fmt.Errorf("failed to retrieve the latest version: no tags found")
+		return repo.Latest(ctx)
 	}
 	max := slices.MaxFunc(tags, func(a, b string) int {
 		return comparator(module.Version{modPath, a}, module.Version{modPath, b})
