@@ -11,27 +11,42 @@ import (
 	"github.com/goplus/llar/internal/execbroker"
 )
 
+func setenv(t *testing.T, key, value string) {
+	t.Helper()
+	old, existed := execbroker.LookupEnv(key)
+	if err := execbroker.Setenv(key, value); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = execbroker.Setenv(key, old)
+		} else {
+			_ = execbroker.Unsetenv(key)
+		}
+	})
+}
+
 func TestUse(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "lib", "pkgconfig")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PKG_CONFIG_PATH", "/existing")
+	setenv(t, "PKG_CONFIG_PATH", "/existing")
 
 	Use(root)
 
-	if got, want := os.Getenv("PKG_CONFIG_PATH"), dir+string(os.PathListSeparator)+"/existing"; got != want {
+	if got, want := execbroker.Getenv("PKG_CONFIG_PATH"), dir+string(os.PathListSeparator)+"/existing"; got != want {
 		t.Fatalf("PKG_CONFIG_PATH = %q, want %q", got, want)
 	}
 }
 
 func TestUseIgnoresMissingDirectory(t *testing.T) {
-	t.Setenv("PKG_CONFIG_PATH", "/existing")
+	setenv(t, "PKG_CONFIG_PATH", "/existing")
 
 	Use(t.TempDir())
 
-	if got := os.Getenv("PKG_CONFIG_PATH"); got != "/existing" {
+	if got := execbroker.Getenv("PKG_CONFIG_PATH"); got != "/existing" {
 		t.Fatalf("PKG_CONFIG_PATH = %q, want unchanged", got)
 	}
 }
@@ -56,7 +71,7 @@ func TestQueries(t *testing.T) {
 					request = req
 					req.Name = os.Args[0]
 					req.Args = []string{"-test.run=TestLookupHelperProcess"}
-					req.Env = append(os.Environ(), "GO_WANT_PKGCONFIG_HELPER=1")
+					req.Env = append(execbroker.Environ(), "GO_WANT_PKGCONFIG_HELPER=1")
 					return req, nil
 				},
 			}, func() error {
@@ -95,7 +110,7 @@ func TestQueryErrors(t *testing.T) {
 				Middleware: func(req execbroker.Request) (execbroker.Request, error) {
 					req.Name = os.Args[0]
 					req.Args = []string{"-test.run=TestLookupHelperProcess"}
-					req.Env = append(os.Environ(),
+					req.Env = append(execbroker.Environ(),
 						"GO_WANT_PKGCONFIG_HELPER=1",
 						"GO_PKGCONFIG_HELPER_FAIL=1",
 						"GO_PKGCONFIG_HELPER_STDERR="+tt.detail,
@@ -114,11 +129,11 @@ func TestQueryErrors(t *testing.T) {
 }
 
 func TestLookupHelperProcess(t *testing.T) {
-	if os.Getenv("GO_WANT_PKGCONFIG_HELPER") != "1" {
+	if execbroker.Getenv("GO_WANT_PKGCONFIG_HELPER") != "1" {
 		return
 	}
-	if os.Getenv("GO_PKGCONFIG_HELPER_FAIL") == "1" {
-		if detail := os.Getenv("GO_PKGCONFIG_HELPER_STDERR"); detail != "" {
+	if execbroker.Getenv("GO_PKGCONFIG_HELPER_FAIL") == "1" {
+		if detail := execbroker.Getenv("GO_PKGCONFIG_HELPER_STDERR"); detail != "" {
 			fmt.Fprintln(os.Stderr, detail)
 		}
 		os.Exit(1)

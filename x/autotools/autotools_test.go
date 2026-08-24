@@ -7,7 +7,24 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/goplus/llar/internal/execbroker"
 )
+
+func setenv(t *testing.T, key, value string) {
+	t.Helper()
+	old, existed := execbroker.LookupEnv(key)
+	if err := execbroker.Setenv(key, value); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = execbroker.Setenv(key, old)
+		} else {
+			_ = execbroker.Unsetenv(key)
+		}
+	})
+}
 
 func TestUseSetsEnv(t *testing.T) {
 	root := t.TempDir()
@@ -24,7 +41,7 @@ func TestUseSetsEnv(t *testing.T) {
 		"PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH",
 		"CMAKE_LIBRARY_PATH", "INCLUDE", "LIB", "CPPFLAGS", "LDFLAGS",
 	} {
-		t.Setenv(key, "")
+		setenv(t, key, "")
 	}
 
 	a := New("", "", "")
@@ -36,23 +53,23 @@ func TestUseSetsEnv(t *testing.T) {
 		"CMAKE_INCLUDE_PATH": includeDir,
 		"CMAKE_LIBRARY_PATH": libDir,
 	} {
-		if got := os.Getenv(key); got != want {
+		if got := execbroker.Getenv(key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
 
 	if runtime.GOOS == "windows" {
-		if got := os.Getenv("INCLUDE"); got != includeDir {
+		if got := execbroker.Getenv("INCLUDE"); got != includeDir {
 			t.Errorf("INCLUDE = %q, want %q", got, includeDir)
 		}
-		if got := os.Getenv("LIB"); got != libDir {
+		if got := execbroker.Getenv("LIB"); got != libDir {
 			t.Errorf("LIB = %q, want %q", got, libDir)
 		}
 	} else {
-		if got := os.Getenv("CPPFLAGS"); strings.TrimSpace(got) != "-I"+includeDir {
+		if got := execbroker.Getenv("CPPFLAGS"); strings.TrimSpace(got) != "-I"+includeDir {
 			t.Errorf("CPPFLAGS = %q, want %q", got, "-I"+includeDir)
 		}
-		if got := os.Getenv("LDFLAGS"); strings.TrimSpace(got) != "-L"+libDir {
+		if got := execbroker.Getenv("LDFLAGS"); strings.TrimSpace(got) != "-L"+libDir {
 			t.Errorf("LDFLAGS = %q, want %q", got, "-L"+libDir)
 		}
 	}
@@ -66,18 +83,18 @@ func TestUseMultipleDeps(t *testing.T) {
 		os.MkdirAll(filepath.Join(r, "lib"), 0o755)
 	}
 
-	t.Setenv("CMAKE_INCLUDE_PATH", "")
-	t.Setenv("CMAKE_LIBRARY_PATH", "")
-	t.Setenv("CMAKE_PREFIX_PATH", "")
-	t.Setenv("CPPFLAGS", "")
-	t.Setenv("LDFLAGS", "")
+	setenv(t, "CMAKE_INCLUDE_PATH", "")
+	setenv(t, "CMAKE_LIBRARY_PATH", "")
+	setenv(t, "CMAKE_PREFIX_PATH", "")
+	setenv(t, "CPPFLAGS", "")
+	setenv(t, "LDFLAGS", "")
 
 	a := New("", "", "")
 	a.Use(root1)
 	a.Use(root2)
 
 	// prependPath: root2 should be prepended before root1
-	got := os.Getenv("CMAKE_PREFIX_PATH")
+	got := execbroker.Getenv("CMAKE_PREFIX_PATH")
 	if !strings.HasPrefix(got, root2) {
 		t.Errorf("CMAKE_PREFIX_PATH = %q, expected %q to be first", got, root2)
 	}
@@ -86,7 +103,7 @@ func TestUseMultipleDeps(t *testing.T) {
 	}
 
 	// appendFlag: root1 flag should come before root2 flag
-	cppflags := os.Getenv("CPPFLAGS")
+	cppflags := execbroker.Getenv("CPPFLAGS")
 	i1 := strings.Index(cppflags, filepath.Join(root1, "include"))
 	i2 := strings.Index(cppflags, filepath.Join(root2, "include"))
 	if i1 < 0 || i2 < 0 || i1 >= i2 {
@@ -101,16 +118,16 @@ func TestUsePartialDirs(t *testing.T) {
 	for _, key := range []string{
 		"PKG_CONFIG_PATH", "CMAKE_LIBRARY_PATH", "CPPFLAGS", "LDFLAGS",
 	} {
-		t.Setenv(key, "")
+		setenv(t, key, "")
 	}
 
 	a := New("", "", "")
 	a.Use(root)
 
-	if got := os.Getenv("PKG_CONFIG_PATH"); got != "" {
+	if got := execbroker.Getenv("PKG_CONFIG_PATH"); got != "" {
 		t.Errorf("PKG_CONFIG_PATH = %q, want empty", got)
 	}
-	if got := os.Getenv("CMAKE_LIBRARY_PATH"); got != "" {
+	if got := execbroker.Getenv("CMAKE_LIBRARY_PATH"); got != "" {
 		t.Errorf("CMAKE_LIBRARY_PATH = %q, want empty", got)
 	}
 }
@@ -142,7 +159,7 @@ func TestWorkDir(t *testing.T) {
 }
 
 func TestPrependPath(t *testing.T) {
-	t.Setenv("TEST_PREPEND", "/existing")
+	setenv(t, "TEST_PREPEND", "/existing")
 	prependPath("TEST_PREPEND", "/new")
 
 	sep := ":"
@@ -150,17 +167,17 @@ func TestPrependPath(t *testing.T) {
 		sep = ";"
 	}
 	want := "/new" + sep + "/existing"
-	if got := os.Getenv("TEST_PREPEND"); got != want {
+	if got := execbroker.Getenv("TEST_PREPEND"); got != want {
 		t.Errorf("TEST_PREPEND = %q, want %q", got, want)
 	}
 }
 
 func TestAppendFlag(t *testing.T) {
-	t.Setenv("TEST_FLAGS", "-Ifoo")
+	setenv(t, "TEST_FLAGS", "-Ifoo")
 	appendFlag("TEST_FLAGS", "-Ibar")
 
 	want := "-Ifoo -Ibar"
-	if got := os.Getenv("TEST_FLAGS"); got != want {
+	if got := execbroker.Getenv("TEST_FLAGS"); got != want {
 		t.Errorf("TEST_FLAGS = %q, want %q", got, want)
 	}
 }

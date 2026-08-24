@@ -194,16 +194,16 @@ func prependPath(key, value string) {
 	if runtime.GOOS == "windows" {
 		sep = ";"
 	}
-	if cur := os.Getenv(key); cur != "" {
+	if cur := execbroker.Getenv(key); cur != "" {
 		value += sep + cur
 	}
-	os.Setenv(key, value)
+	_ = execbroker.Setenv(key, value)
 }
 
 // appendFlag appends a space-separated flag to an env var.
 func appendFlag(key, flag string) {
-	if cur := os.Getenv(key); cur != "" {
+	if cur := execbroker.Getenv(key); cur != "" {
 		flag = cur + " " + flag
 	}
-	os.Setenv(key, flag)
+	_ = execbroker.Setenv(key, flag)
 }

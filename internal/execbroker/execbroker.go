@@ -66,6 +66,125 @@ func Do(scope Scope, fn func() error) error {
 	return fn()
 }
 
+// Getenv returns the value of key from the active command scope. Without a
+// scope, it has the same behavior as os.Getenv.
+func Getenv(key string) string {
+	id := goid.Get()
+	scopeMu.RLock()
+	scope, ok := scopes[id]
+	if ok && scope.Env != nil {
+		value := envValue(scope.Env, key)
+		scopeMu.RUnlock()
+		return value
+	}
+	scopeMu.RUnlock()
+	return os.Getenv(key)
+}
+
+// LookupEnv returns the value of key and whether it is present in the active
+// command scope. Without a scope, it has the same behavior as os.LookupEnv.
+func LookupEnv(key string) (string, bool) {
+	id := goid.Get()
+	scopeMu.RLock()
+	scope, ok := scopes[id]
+	if ok && scope.Env != nil {
+		value, present := envLookup(scope.Env, key)
+		scopeMu.RUnlock()
+		return value, present
+	}
+	scopeMu.RUnlock()
+	return os.LookupEnv(key)
+}
+
+// Setenv sets key in the active command scope. The first scoped write copies
+// the process environment so later commands inherit the update without
+// changing the process-wide environment. Without a scope, it has the same
+// behavior as os.Setenv.
+func Setenv(key, value string) error {
+	if err := validateEnvKey(key); err != nil {
+		return err
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] == 0 {
+			return fmt.Errorf("invalid environment variable value for %q", key)
+		}
+	}
+
+	id := goid.Get()
+	scopeMu.Lock()
+	defer scopeMu.Unlock()
+
+	scope, ok := scopes[id]
+	if !ok {
+		return os.Setenv(key, value)
+	}
+	if scope.Env == nil {
+		scope.Env = os.Environ()
+	}
+	scope.Env = setEnv(scope.Env, key, value)
+	scopes[id] = scope
+	return nil
+}
+
+// Unsetenv removes key from the active command scope. Without a scope, it has
+// the same behavior as os.Unsetenv.
+func Unsetenv(key string) error {
+	if err := validateEnvKey(key); err != nil {
+		return err
+	}
+
+	id := goid.Get()
+	scopeMu.Lock()
+	defer scopeMu.Unlock()
+
+	scope, ok := scopes[id]
+	if !ok {
+		return os.Unsetenv(key)
+	}
+	if scope.Env == nil {
+		scope.Env = os.Environ()
+	}
+	scope.Env = unsetEnv(scope.Env, key)
+	scopes[id] = scope
+	return nil
+}
+
+// Clearenv removes all variables from the active command scope. Without a
+// scope, it has the same behavior as os.Clearenv.
+func Clearenv() {
+	id := goid.Get()
+	scopeMu.Lock()
+	defer scopeMu.Unlock()
+
+	scope, ok := scopes[id]
+	if !ok {
+		os.Clearenv()
+		return
+	}
+	scope.Env = []string{}
+	scopes[id] = scope
+}
+
+// Environ returns a copy of the active command scope environment. Without a
+// scope, it has the same behavior as os.Environ.
+func Environ() []string {
+	id := goid.Get()
+	scopeMu.RLock()
+	scope, ok := scopes[id]
+	if ok && scope.Env != nil {
+		env := clone(scope.Env)
+		scopeMu.RUnlock()
+		return env
+	}
+	scopeMu.RUnlock()
+	return os.Environ()
+}
+
+// ExpandEnv expands variables using the active command scope environment.
+func ExpandEnv(s string) string {
+	return os.Expand(s, Getenv)
+}
+
 // Println writes to the stdout configured for the active scope.
 func Println(a ...any) (int, error) {
 	w := io.Writer(os.Stdout)
@@ -181,4 +300,53 @@ func clone(in []string) []string {
 		return nil
 	}
 	return append([]string(nil), in...)
+}
+
+func envValue(env []string, key string) string {
+	value, _ := envLookup(env, key)
+	return value
+}
+
+func envLookup(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if len(env[i]) >= len(prefix) && env[i][:len(prefix)] == prefix {
+			return env[i][len(prefix):], true
+		}
+	}
+	return "", false
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i := range env {
+		if len(env[i]) >= len(prefix) && env[i][:len(prefix)] == prefix {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func unsetEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, entry := range env {
+		if len(entry) < len(prefix) || entry[:len(prefix)] != prefix {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func validateEnvKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("invalid environment variable name")
+	}
+	for i := 0; i < len(key); i++ {
+		if key[i] == '=' || key[i] == 0 {
+			return fmt.Errorf("invalid environment variable name %q", key)
+		}
+	}
+	return nil
 }
