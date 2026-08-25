@@ -18,6 +18,7 @@ jobs:
       matrix:
         go:
           - 1.25.x
+          - 1.26.x
 
     steps:
       - name: Check out code
