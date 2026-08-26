@@ -13,9 +13,6 @@ onBuild ctx => {
 	os.mkdirAll(pcDir, 0o755)!
 
 	pc := pcfile.new(
-		variables = {
-			"prefix": "$${pcfiledir}/../..",
-		},
 		name = "llar-formula-pcfile-test",
 		description = "Formula pcfile auto-import test",
 		version = "1.0.0",
