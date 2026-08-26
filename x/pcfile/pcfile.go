@@ -12,16 +12,26 @@ import (
 
 // Spec describes the compiler and linker interface published by a package.
 type Spec struct {
-	Name        string
+	// Name: The displayed name of the package.
+	Name string
+	// Description: A description of the package.
 	Description string
-	Version     string
-	Homepage    string
+	// Version: The version of the package.
+	Version string
+	// Homepage is encoded as URL: A URL to a webpage for the package. This is
+	// used to recommend where newer versions of the package can be acquired.
+	Homepage string
 
+	// IncludeDirs emits each package-relative path as -I${prefix}/<path> in Cflags.
 	IncludeDirs []string
+	// LibraryDirs emits each package-relative path as -L${prefix}/<path> in Libs.
 	LibraryDirs []string
-	Libraries   []string
-	Defines     []string
-	Frameworks  []string
+	// Libraries emits each name as -l<name> in Libs.
+	Libraries []string
+	// Defines emits each definition as -D<definition> in Cflags.
+	Defines []string
+	// Frameworks emits each name as -framework <name> in Libs.
+	Frameworks []string
 }
 
 // File is validated pkg-config metadata ready to be written.
