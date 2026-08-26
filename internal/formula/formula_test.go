@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -97,8 +98,8 @@ func TestLoadFS_TargetSurface(t *testing.T) {
 	f.OnBuild(&formulapkg.Context{})
 }
 
-func TestFormulaPCFileAutoImport(t *testing.T) {
-	f, err := LoadFS(os.DirFS("testdata/formula").(fs.ReadFileFS), "pcfileusage_llar.gox")
+func TestFormulaPkgConfigFileAutoImport(t *testing.T) {
+	f, err := LoadFS(os.DirFS("testdata/formula").(fs.ReadFileFS), "pkgconfigusage_llar.gox")
 	if err != nil {
 		t.Fatalf("LoadFS failed: %v", err)
 	}
@@ -116,9 +117,19 @@ func TestFormulaPCFileAutoImport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pcPath := filepath.Join(installDir, "lib", "pkgconfig", "llar-formula-pcfile-test.pc")
-	if _, err := os.Stat(pcPath); err != nil {
+	pcPath := filepath.Join(installDir, "lib", "pkgconfig", "llar-formula-pkgconfig-test.pc")
+	data, err := os.ReadFile(pcPath)
+	if err != nil {
 		t.Fatalf("generated pkg-config file: %v", err)
+	}
+	wantProperties := "Libs: -L${libdir} -lllar_formula_pkgconfig_test\n" +
+		"Libs.private: -lm\n" +
+		"Libs.shared: -lllar_formula_shared\n" +
+		"Cflags: -I${includedir} -DLLAR_FORMULA_PKGCONFIG_TEST\n" +
+		"Cflags.private: -DLLAR_FORMULA_STATIC\n" +
+		"Cflags.shared: -DLLAR_FORMULA_SHARED\n"
+	if !strings.HasSuffix(string(data), wantProperties) {
+		t.Fatalf("generated properties:\n%s\nwant suffix:\n%s", data, wantProperties)
 	}
 	got := strings.Fields(ctx.Out.Metadata())
 	for i, flag := range got {
@@ -126,19 +137,22 @@ func TestFormulaPCFileAutoImport(t *testing.T) {
 			got[i] = flag[:2] + filepath.Clean(flag[2:])
 		}
 	}
-	want := []string{
+	wantPublic := []string{
 		"-I" + filepath.Join(installDir, "include"),
-		"-DLLAR_FORMULA_PCFILE_TEST",
+		"-DLLAR_FORMULA_PKGCONFIG_TEST",
 		"-L" + filepath.Join(installDir, "lib"),
-		"-l" + "llar_formula_pcfile_test",
+		"-l" + "llar_formula_pkgconfig_test",
 	}
-	if len(got) != len(want) {
-		t.Fatalf("metadata = %q, want %q", got, want)
+	wantShared := []string{
+		"-I" + filepath.Join(installDir, "include"),
+		"-DLLAR_FORMULA_PKGCONFIG_TEST",
+		"-DLLAR_FORMULA_SHARED",
+		"-L" + filepath.Join(installDir, "lib"),
+		"-l" + "llar_formula_pkgconfig_test",
+		"-lllar_formula_shared",
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("metadata[%d] = %q, want %q", i, got[i], want[i])
-		}
+	if !slices.Equal(got, wantPublic) && !slices.Equal(got, wantShared) {
+		t.Fatalf("metadata = %q, want public %q or pkgconf shared %q", got, wantPublic, wantShared)
 	}
 }
 

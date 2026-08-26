@@ -11,7 +11,6 @@ package ixgo
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/gnu
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/autotools
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/cmake
-//go:generate qexp -outdir pkg github.com/goplus/llar/x/pcfile
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/pkgconfig
 //go:generate qexp -outdir pkg github.com/goplus/llar/mod/module
 //go:generate qexp -outdir pkg github.com/qiniu/x/gsh
@@ -27,7 +26,6 @@ import (
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/autotools"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/cmake"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/gnu"
-	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/pcfile"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/pkgconfig"
 
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/qiniu/x/gsh"

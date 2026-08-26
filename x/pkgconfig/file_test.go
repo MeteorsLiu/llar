@@ -1,4 +1,4 @@
-package pcfile
+package pkgconfig
 
 import (
 	"bytes"
@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/goplus/llar/internal/execbroker"
-	"github.com/goplus/llar/x/pkgconfig"
 	"github.com/kballard/go-shellquote"
 )
 
@@ -231,6 +230,68 @@ func TestNewWritesFragmentsVerbatim(t *testing.T) {
 	}
 }
 
+func TestWriteToEncodesPrivateAndSharedFragments(t *testing.T) {
+	file, err := New(&Spec{
+		Name:        "demo",
+		Description: "demo library",
+		Version:     "1.0.0",
+		Libs:        []string{"-L${libdir}", "-ldemo"},
+		Cflags:      []string{"-I${includedir}"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Libs().Private([]string{"-lm"})
+	file.Libs().Shared([]string{"-ldemo-runtime"})
+	file.Cflags().Private([]string{"-DDEMO_STATIC"})
+	file.Cflags().Shared([]string{"-DDEMO_SHARED"})
+
+	var out bytes.Buffer
+	if _, err := file.WriteTo(&out); err != nil {
+		t.Fatal(err)
+	}
+	want := "Libs: -L${libdir} -ldemo\n" +
+		"Libs.private: -lm\n" +
+		"Libs.shared: -ldemo-runtime\n" +
+		"Cflags: -I${includedir}\n" +
+		"Cflags.private: -DDEMO_STATIC\n" +
+		"Cflags.shared: -DDEMO_SHARED\n"
+	if !strings.HasSuffix(out.String(), want) {
+		t.Fatalf("encoded properties:\n%s\nwant suffix:\n%s", out.String(), want)
+	}
+}
+
+func TestWriteToValidatesPrivateAndSharedFragments(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*File)
+		want string
+	}{
+		{name: "empty private library", set: func(file *File) { file.Libs().Private([]string{""}) }, want: "Libs.private contains an empty value"},
+		{name: "multiline shared library", set: func(file *File) { file.Libs().Shared([]string{"-lone\n-ltwo"}) }, want: "Libs.shared value"},
+		{name: "empty private compiler flag", set: func(file *File) { file.Cflags().Private([]string{""}) }, want: "Cflags.private contains an empty value"},
+		{name: "multiline shared compiler flag", set: func(file *File) { file.Cflags().Shared([]string{"-DONE\n-DTWO"}) }, want: "Cflags.shared value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, err := New(&Spec{Name: "demo", Description: "demo library", Version: "1.0.0"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.set(file)
+
+			var out bytes.Buffer
+			_, err = file.WriteTo(&out)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("WriteTo error = %v, want containing %q", err, tt.want)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("WriteTo wrote %d bytes before validation", out.Len())
+			}
+		})
+	}
+}
+
 type limitedWriter struct {
 	n   int
 	err error
@@ -261,7 +322,7 @@ func TestWriteToReportsWriterResults(t *testing.T) {
 	}
 }
 
-func TestPkgconfigLookupReadsEncodedFile(t *testing.T) {
+func TestLookupReadsEncodedFile(t *testing.T) {
 	if _, err := exec.LookPath("pkg-config"); err != nil {
 		t.Skip("pkg-config is not installed")
 	}
@@ -272,16 +333,16 @@ func TestPkgconfigLookupReadsEncodedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	file, err := New(&Spec{
-		Name:        "llar-pcfile-test",
-		Description: "pcfile integration test",
+		Name:        "llar-pkgconfig-test",
+		Description: "pkgconfig integration test",
 		Version:     "1.0.0",
-		Libs:        []string{"-L${prefix}/lib/custom", "-lllar_pcfile_test", "-lm"},
-		Cflags:      []string{"-I${prefix}/include/first", "-I${prefix}/include/second", "-DLLAR_PCFILE_TEST"},
+		Libs:        []string{"-L${prefix}/lib/custom", "-lllar_pkgconfig_test", "-lm"},
+		Cflags:      []string{"-I${prefix}/include/first", "-I${prefix}/include/second", "-DLLAR_PKGCONFIG_TEST"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := os.Create(filepath.Join(pcDir, "llar-pcfile-test.pc"))
+	out, err := os.Create(filepath.Join(pcDir, "llar-pkgconfig-test.pc"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,9 +357,9 @@ func TestPkgconfigLookupReadsEncodedFile(t *testing.T) {
 	var metadata string
 	env := append(os.Environ(), "PKG_CONFIG_PATH=")
 	err = execbroker.Do(execbroker.Scope{Env: env}, func() error {
-		pkgconfig.Use(root)
+		Use(root)
 		var err error
-		metadata, err = pkgconfig.Lookup("llar-pcfile-test")
+		metadata, err = Lookup("llar-pkgconfig-test")
 		return err
 	})
 	if err != nil {
@@ -316,9 +377,9 @@ func TestPkgconfigLookupReadsEncodedFile(t *testing.T) {
 	want := []string{
 		"-I" + filepath.Join(root, "include", "first"),
 		"-I" + filepath.Join(root, "include", "second"),
-		"-DLLAR_PCFILE_TEST",
+		"-DLLAR_PKGCONFIG_TEST",
 		"-L" + filepath.Join(root, "lib", "custom"),
-		"-lllar_pcfile_test",
+		"-lllar_pkgconfig_test",
 		"-lm",
 	}
 	if !reflect.DeepEqual(got, want) {

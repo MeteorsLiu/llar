@@ -1,4 +1,4 @@
-// Package pkgconfig configures and queries pkg-config metadata.
+// Package pkgconfig creates, configures, and queries pkg-config metadata.
 package pkgconfig
 
 import (

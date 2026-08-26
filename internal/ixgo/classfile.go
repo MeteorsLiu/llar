@@ -43,10 +43,6 @@ func init() {
 				Path: "github.com/goplus/llar/x/cmake",
 			},
 			{
-				Name: "pcfile",
-				Path: "github.com/goplus/llar/x/pcfile",
-			},
-			{
 				Name: "pkgconfig",
 				Path: "github.com/goplus/llar/x/pkgconfig",
 			},
