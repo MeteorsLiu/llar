@@ -1,22 +1,22 @@
 module github.com/goplus/llar
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/google/go-containerregistry v0.20.7
-	github.com/goplus/ixgo v1.1.2-0.20260728090628-e6b365701d30
-	github.com/goplus/mod v0.21.1
-	github.com/goplus/xgo v1.7.5
+	github.com/goplus/ixgo v1.1.6
+	github.com/goplus/mod v0.21.2
+	github.com/goplus/xgo v1.7.6-0.20260818050008-fd36b6192e30
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/joho/godotenv v1.5.1
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/petermattis/goid v0.0.0-20260713073324-57ed88f34a0a
 	github.com/qiniu/go-sdk/v7 v7.26.14
-	github.com/qiniu/x v1.18.0
+	github.com/qiniu/x v1.18.3
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/mod v0.32.0
-	golang.org/x/sync v0.19.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/mod v0.39.0
+	golang.org/x/sync v0.22.0
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -28,8 +28,8 @@ require (
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/gammazero/toposort v0.1.1 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
-	github.com/goplus/gogen v1.23.5 // indirect
-	github.com/goplus/reflectx v1.7.3 // indirect
+	github.com/goplus/gogen v1.23.6-0.20260816085451-b240c8b2c5b1 // indirect
+	github.com/goplus/reflectx v1.7.8 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
@@ -38,13 +38,13 @@ require (
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	github.com/timandy/routine v1.1.6 // indirect
+	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/vbatts/tar-split v0.12.2 // indirect
 	github.com/visualfc/funcval v0.1.5 // indirect
-	github.com/visualfc/gid v0.3.1 // indirect
+	github.com/visualfc/gid v0.3.5 // indirect
 	github.com/visualfc/goembed v0.3.4 // indirect
-	github.com/visualfc/xtype v0.3.2 // indirect
-	golang.org/x/tools v0.41.0 // indirect
+	github.com/visualfc/xtype v0.3.3 // indirect
+	golang.org/x/tools v0.49.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	modernc.org/fileutil v1.0.0 // indirect
 )
