@@ -8,7 +8,10 @@ import (
 	"bytes"
 	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +95,51 @@ func TestLoadFS_TargetSurface(t *testing.T) {
 		t.Fatalf("deps = %+v, want [madler/zlib@v1.3.1]", gotDeps)
 	}
 	f.OnBuild(&formulapkg.Context{})
+}
+
+func TestFormulaPCFileAutoImport(t *testing.T) {
+	f, err := LoadFS(os.DirFS("testdata/formula").(fs.ReadFileFS), "pcfileusage_llar.gox")
+	if err != nil {
+		t.Fatalf("LoadFS failed: %v", err)
+	}
+	if _, err := exec.LookPath("pkg-config"); err != nil {
+		t.Skip("pkg-config is not installed")
+	}
+
+	installDir := t.TempDir()
+	ctx := formulapkg.NewContext(&formulapkg.Project{}, "", installDir, "", nil)
+	env := append(os.Environ(), "PKG_CONFIG_PATH=")
+	if err := execbroker.Do(execbroker.Scope{Env: env}, func() error {
+		f.OnBuild(ctx)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pcPath := filepath.Join(installDir, "lib", "pkgconfig", "llar-formula-pcfile-test.pc")
+	if _, err := os.Stat(pcPath); err != nil {
+		t.Fatalf("generated pkg-config file: %v", err)
+	}
+	got := strings.Fields(ctx.Out.Metadata())
+	for i, flag := range got {
+		if strings.HasPrefix(flag, "-I") || strings.HasPrefix(flag, "-L") {
+			got[i] = flag[:2] + filepath.Clean(flag[2:])
+		}
+	}
+	want := []string{
+		"-I" + filepath.Join(installDir, "include"),
+		"-DLLAR_FORMULA_PCFILE_TEST",
+		"-L" + filepath.Join(installDir, "lib"),
+		"-l" + "llar_formula_pcfile_test",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("metadata = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("metadata[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
 }
 
 func TestClone(t *testing.T) {

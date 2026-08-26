@@ -1,0 +1,30 @@
+import (
+	"os"
+	"path/filepath"
+)
+
+id "test/pcfile"
+
+fromVer "v1.0.0"
+
+onBuild ctx => {
+	installDir := ctx.outputDir
+	pcDir := filepath.join(installDir, "lib", "pkgconfig")
+	os.mkdirAll(pcDir, 0o755)!
+
+	pc := pcfile.new(
+		name = "llar-formula-pcfile-test",
+		description = "Formula pcfile auto-import test",
+		version = "1.0.0",
+		includeDirs = ["include"],
+		libraryDirs = ["lib"],
+		libraries = ["llar_formula_pcfile_test"],
+		defines = ["LLAR_FORMULA_PCFILE_TEST"],
+	)!
+	out := os.create(filepath.join(pcDir, "llar-formula-pcfile-test.pc"))!
+	pc.writeTo(out)!
+	out.close()!
+
+	pkgconfig.use installDir
+	ctx.setMetadata pkgconfig.lookup("llar-formula-pcfile-test")!
+}
