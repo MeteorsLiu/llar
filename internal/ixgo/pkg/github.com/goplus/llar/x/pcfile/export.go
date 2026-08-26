@@ -15,11 +15,10 @@ func init() {
 		Name: "pcfile",
 		Path: "github.com/goplus/llar/x/pcfile",
 		Deps: map[string]string{
-			"fmt":                               "fmt",
-			"github.com/kballard/go-shellquote": "shellquote",
-			"io":                                "io",
-			"path":                              "path",
-			"strings":                           "strings",
+			"fmt":     "fmt",
+			"io":      "io",
+			"sort":    "sort",
+			"strings": "strings",
 		},
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{

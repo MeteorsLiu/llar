@@ -28,73 +28,84 @@ func TestNewEncodesFormulaShapes(t *testing.T) {
 				Name:        "glm",
 				Description: "OpenGL Mathematics (GLM)",
 				Version:     "1.0.1",
-				IncludeDirs: []string{"include"},
+				Cflags:      []string{"-I${includedir}"},
 			},
-			want: "prefix=${pcfiledir}/../..\n\n" +
+			want: "prefix=${pcfiledir}/../..\n" +
+				"exec_prefix=${prefix}\n" +
+				"libdir=${prefix}/lib\n" +
+				"includedir=${prefix}/include\n\n" +
 				"Name: glm\n" +
 				"Description: OpenGL Mathematics (GLM)\n" +
 				"Version: 1.0.1\n" +
 				"Libs:\n" +
-				"Cflags: -I${prefix}/include\n",
+				"Cflags: -I${includedir}\n",
 		},
 		{
 			name: "custom library directory",
 			spec: &Spec{
+				Variables:   map[string]string{"libdir": "${prefix}/lib/datetime"},
 				Name:        "datetime",
 				Description: "A simple Date and time library built in C++",
 				Version:     "1.0.2",
-				IncludeDirs: []string{"include"},
-				LibraryDirs: []string{"lib/datetime"},
-				Libraries:   []string{"datetime", "m", "pthread", "dl"},
-				Defines:     []string{"DATETIME_STATIC"},
+				Libs:        []string{"-L${libdir}", "-ldatetime", "-lm", "-lpthread", "-ldl"},
+				Cflags:      []string{"-I${includedir}", "-DDATETIME_STATIC"},
 			},
-			want: "prefix=${pcfiledir}/../..\n\n" +
+			want: "prefix=${pcfiledir}/../..\n" +
+				"exec_prefix=${prefix}\n" +
+				"libdir=${prefix}/lib/datetime\n" +
+				"includedir=${prefix}/include\n\n" +
 				"Name: datetime\n" +
 				"Description: A simple Date and time library built in C++\n" +
 				"Version: 1.0.2\n" +
-				"Libs: -L${prefix}/lib/datetime -ldatetime -lm -lpthread -ldl\n" +
-				"Cflags: -I${prefix}/include -DDATETIME_STATIC\n",
+				"Libs: -L${libdir} -ldatetime -lm -lpthread -ldl\n" +
+				"Cflags: -I${includedir} -DDATETIME_STATIC\n",
 		},
 		{
-			name: "multiple directories and frameworks",
+			name: "multiple flags and frameworks",
 			spec: &Spec{
 				Name:        "ntv2",
 				Description: "AJA NTV2 SDK",
 				Version:     "16.2",
-				IncludeDirs: []string{
-					"include/ajalibraries",
-					"include/ajalibraries/ajabase",
+				Libs: []string{
+					"-L${libdir}", "-lajantv2", "-lpthread", "-lrt",
+					"-framework", "CoreFoundation", "-framework", "Foundation", "-framework", "IOKit",
 				},
-				LibraryDirs: []string{"lib"},
-				Libraries:   []string{"ajantv2", "pthread", "rt"},
-				Defines:     []string{"AJALinux", "AJA_LINUX", "NTV2_USE_STDINT"},
-				Frameworks:  []string{"CoreFoundation", "Foundation", "IOKit"},
+				Cflags: []string{
+					"-I${includedir}/ajalibraries",
+					"-I${includedir}/ajalibraries/ajabase",
+					"-DAJALinux", "-DAJA_LINUX", "-DNTV2_USE_STDINT",
+				},
 			},
-			want: "prefix=${pcfiledir}/../..\n\n" +
+			want: "prefix=${pcfiledir}/../..\n" +
+				"exec_prefix=${prefix}\n" +
+				"libdir=${prefix}/lib\n" +
+				"includedir=${prefix}/include\n\n" +
 				"Name: ntv2\n" +
 				"Description: AJA NTV2 SDK\n" +
 				"Version: 16.2\n" +
-				"Libs: -L${prefix}/lib -lajantv2 -lpthread -lrt -framework CoreFoundation -framework Foundation -framework IOKit\n" +
-				"Cflags: -I${prefix}/include/ajalibraries -I${prefix}/include/ajalibraries/ajabase -DAJALinux -DAJA_LINUX -DNTV2_USE_STDINT\n",
+				"Libs: -L${libdir} -lajantv2 -lpthread -lrt -framework CoreFoundation -framework Foundation -framework IOKit\n" +
+				"Cflags: -I${includedir}/ajalibraries -I${includedir}/ajalibraries/ajabase -DAJALinux -DAJA_LINUX -DNTV2_USE_STDINT\n",
 		},
 		{
-			name: "homepage",
+			name: "URL",
 			spec: &Spec{
 				Name:        "libdmtx",
 				Description: "Library for reading and writing Data Matrix barcodes",
 				Version:     "0.7.8",
-				Homepage:    "http://www.libdmtx.org/",
-				IncludeDirs: []string{"include"},
-				LibraryDirs: []string{"lib"},
-				Libraries:   []string{"dmtx", "m"},
+				URL:         "http://www.libdmtx.org/",
+				Libs:        []string{"-L${libdir}", "-ldmtx", "-lm"},
+				Cflags:      []string{"-I${includedir}"},
 			},
-			want: "prefix=${pcfiledir}/../..\n\n" +
+			want: "prefix=${pcfiledir}/../..\n" +
+				"exec_prefix=${prefix}\n" +
+				"libdir=${prefix}/lib\n" +
+				"includedir=${prefix}/include\n\n" +
 				"Name: libdmtx\n" +
 				"Description: Library for reading and writing Data Matrix barcodes\n" +
 				"Version: 0.7.8\n" +
 				"URL: http://www.libdmtx.org/\n" +
-				"Libs: -L${prefix}/lib -ldmtx -lm\n" +
-				"Cflags: -I${prefix}/include\n",
+				"Libs: -L${libdir} -ldmtx -lm\n" +
+				"Cflags: -I${includedir}\n",
 		},
 	}
 
@@ -116,6 +127,35 @@ func TestNewEncodesFormulaShapes(t *testing.T) {
 				t.Fatalf("encoded file:\n%s\nwant:\n%s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNewDefaultsAndOrdersVariables(t *testing.T) {
+	file, err := New(&Spec{
+		Variables: map[string]string{
+			"prefix": "/opt/demo",
+			"zdir":   "${prefix}/z",
+			"adir":   "${prefix}/a",
+		},
+		Name:        "demo",
+		Description: "demo library",
+		Version:     "1.0.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if _, err := file.WriteTo(&out); err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := "prefix=/opt/demo\n" +
+		"exec_prefix=${prefix}\n" +
+		"libdir=${prefix}/lib\n" +
+		"includedir=${prefix}/include\n" +
+		"adir=${prefix}/a\n" +
+		"zdir=${prefix}/z\n\n"
+	if !strings.HasPrefix(out.String(), wantPrefix) {
+		t.Fatalf("encoded variables:\n%s\nwant prefix:\n%s", out.String(), wantPrefix)
 	}
 }
 
@@ -141,17 +181,18 @@ func TestNewValidatesRequiredFields(t *testing.T) {
 	}
 }
 
-func TestNewValidatesPathsAndFragments(t *testing.T) {
+func TestNewValidatesVariablesAndProperties(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*Spec)
 		want   string
 	}{
-		{name: "absolute include", mutate: func(spec *Spec) { spec.IncludeDirs = []string{"/include"} }, want: "must stay relative"},
-		{name: "escaping library", mutate: func(spec *Spec) { spec.LibraryDirs = []string{"lib/../../outside"} }, want: "must stay relative"},
-		{name: "empty directory", mutate: func(spec *Spec) { spec.IncludeDirs = []string{""} }, want: "empty path"},
-		{name: "empty library", mutate: func(spec *Spec) { spec.Libraries = []string{""} }, want: "empty value"},
-		{name: "multiline define", mutate: func(spec *Spec) { spec.Defines = []string{"ONE\nTWO"} }, want: "single line"},
+		{name: "empty variable name", mutate: func(spec *Spec) { spec.Variables = map[string]string{"": "value"} }, want: "variable name is required"},
+		{name: "invalid variable name", mutate: func(spec *Spec) { spec.Variables = map[string]string{"bad-name": "value"} }, want: "invalid variable name"},
+		{name: "multiline variable", mutate: func(spec *Spec) { spec.Variables = map[string]string{"prefix": "one\ntwo"} }, want: "single line"},
+		{name: "empty Libs entry", mutate: func(spec *Spec) { spec.Libs = []string{""} }, want: "empty value"},
+		{name: "multiline Cflags entry", mutate: func(spec *Spec) { spec.Cflags = []string{"-DONE\n-DTWO"} }, want: "single line"},
+		{name: "multiline URL", mutate: func(spec *Spec) { spec.URL = "https://example.com/\nnext" }, want: "URL must be a single line"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -165,14 +206,13 @@ func TestNewValidatesPathsAndFragments(t *testing.T) {
 	}
 }
 
-func TestNewQuotesFragmentValues(t *testing.T) {
+func TestNewWritesFragmentsVerbatim(t *testing.T) {
 	file, err := New(&Spec{
 		Name:        "demo",
 		Description: "demo library",
 		Version:     "1.0.0",
-		IncludeDirs: []string{"include dir"},
-		Libraries:   []string{"demo lib"},
-		Defines:     []string{"MESSAGE=hello world"},
+		Libs:        []string{"-L${libdir}", "-framework CoreFoundation"},
+		Cflags:      []string{"-I${includedir}", `-DVALUE=\"quoted\"`},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -182,8 +222,8 @@ func TestNewQuotesFragmentValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"Libs: -l'demo lib'",
-		"Cflags: -I${prefix}/'include dir' -D'MESSAGE=hello world'",
+		"Libs: -L${libdir} -framework CoreFoundation",
+		`Cflags: -I${includedir} -DVALUE=\"quoted\"`,
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("encoded file missing %q:\n%s", want, out.String())
@@ -235,10 +275,8 @@ func TestPkgconfigLookupReadsEncodedFile(t *testing.T) {
 		Name:        "llar-pcfile-test",
 		Description: "pcfile integration test",
 		Version:     "1.0.0",
-		IncludeDirs: []string{"include/first", "include/second"},
-		LibraryDirs: []string{"lib/custom"},
-		Libraries:   []string{"llar_pcfile_test", "m"},
-		Defines:     []string{"LLAR_PCFILE_TEST"},
+		Libs:        []string{"-L${prefix}/lib/custom", "-lllar_pcfile_test", "-lm"},
+		Cflags:      []string{"-I${prefix}/include/first", "-I${prefix}/include/second", "-DLLAR_PCFILE_TEST"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +318,7 @@ func TestPkgconfigLookupReadsEncodedFile(t *testing.T) {
 		"-I" + filepath.Join(root, "include", "second"),
 		"-DLLAR_PCFILE_TEST",
 		"-L" + filepath.Join(root, "lib", "custom"),
-		"-l" + "llar_pcfile_test",
+		"-lllar_pcfile_test",
 		"-lm",
 	}
 	if !reflect.DeepEqual(got, want) {

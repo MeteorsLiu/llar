@@ -13,13 +13,14 @@ onBuild ctx => {
 	os.mkdirAll(pcDir, 0o755)!
 
 	pc := pcfile.new(
+		variables = {
+			"prefix": "$${pcfiledir}/../..",
+		},
 		name = "llar-formula-pcfile-test",
 		description = "Formula pcfile auto-import test",
 		version = "1.0.0",
-		includeDirs = ["include"],
-		libraryDirs = ["lib"],
-		libraries = ["llar_formula_pcfile_test"],
-		defines = ["LLAR_FORMULA_PCFILE_TEST"],
+		libs = ["-L$${libdir}", "-lllar_formula_pcfile_test"],
+		cflags = ["-I$${includedir}", "-DLLAR_FORMULA_PCFILE_TEST"],
 	)!
 	out := os.create(filepath.join(pcDir, "llar-formula-pcfile-test.pc"))!
 	pc.writeTo(out)!

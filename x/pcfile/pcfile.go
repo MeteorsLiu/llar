@@ -4,34 +4,30 @@ package pcfile
 import (
 	"fmt"
 	"io"
-	"path"
+	"sort"
 	"strings"
-
-	"github.com/kballard/go-shellquote"
 )
 
-// Spec describes the compiler and linker interface published by a package.
+// Spec describes the variables and properties written to a pkg-config file.
 type Spec struct {
+	// Variables defines pkg-config variables. Values override the default
+	// prefix, exec_prefix, libdir, and includedir variables with the same name.
+	Variables map[string]string
+
 	// Name: The displayed name of the package.
 	Name string
 	// Description: A description of the package.
 	Description string
 	// Version: The version of the package.
 	Version string
-	// Homepage is encoded as URL: A URL to a webpage for the package. This is
-	// used to recommend where newer versions of the package can be acquired.
-	Homepage string
-
-	// IncludeDirs emits each package-relative path as -I${prefix}/<path> in Cflags.
-	IncludeDirs []string
-	// LibraryDirs emits each package-relative path as -L${prefix}/<path> in Libs.
-	LibraryDirs []string
-	// Libraries emits each name as -l<name> in Libs.
-	Libraries []string
-	// Defines emits each definition as -D<definition> in Cflags.
-	Defines []string
-	// Frameworks emits each name as -framework <name> in Libs.
-	Frameworks []string
+	// URL: A URL to a webpage for the package. This is used to recommend where
+	// newer versions of the package can be acquired.
+	URL string
+	// Libs: Required linking flags for this package.
+	Libs []string
+	// Cflags: Required compiler flags. These flags are always used, regardless
+	// of whether static compilation is requested.
+	Cflags []string
 }
 
 // File is validated pkg-config metadata ready to be written.
@@ -53,7 +49,7 @@ func New(spec *Spec) (*File, error) {
 		{name: "name", value: spec.Name, required: true},
 		{name: "description", value: spec.Description, required: true},
 		{name: "version", value: spec.Version, required: true},
-		{name: "homepage", value: spec.Homepage},
+		{name: "URL", value: spec.URL},
 	}
 	for _, field := range fields {
 		if field.required && field.value == "" {
@@ -64,25 +60,30 @@ func New(spec *Spec) (*File, error) {
 		}
 	}
 
-	directories := []struct {
-		name   string
-		values []string
+	defaultVariables := []struct {
+		name  string
+		value string
 	}{
-		{name: "includeDirs", values: spec.IncludeDirs},
-		{name: "libraryDirs", values: spec.LibraryDirs},
+		{name: "prefix", value: "${pcfiledir}/../.."},
+		{name: "exec_prefix", value: "${prefix}"},
+		{name: "libdir", value: "${prefix}/lib"},
+		{name: "includedir", value: "${prefix}/include"},
 	}
-	for _, field := range directories {
-		for _, dir := range field.values {
-			if dir == "" {
-				return nil, fmt.Errorf("pcfile: %s contains an empty path", field.name)
+	defaultNames := make(map[string]struct{}, len(defaultVariables))
+	for _, variable := range defaultVariables {
+		defaultNames[variable.name] = struct{}{}
+	}
+	for name, value := range spec.Variables {
+		if name == "" {
+			return nil, fmt.Errorf("pcfile: variable name is required")
+		}
+		for _, r := range name {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' {
+				return nil, fmt.Errorf("pcfile: invalid variable name %q", name)
 			}
-			clean := path.Clean(dir)
-			if path.IsAbs(dir) || clean == ".." || strings.HasPrefix(clean, "../") {
-				return nil, fmt.Errorf("pcfile: %s path %q must stay relative to the package root", field.name, dir)
-			}
-			if strings.ContainsAny(dir, "\r\n") {
-				return nil, fmt.Errorf("pcfile: %s path %q must be a single line", field.name, dir)
-			}
+		}
+		if strings.ContainsAny(value, "\r\n") {
+			return nil, fmt.Errorf("pcfile: variable %q must be a single line", name)
 		}
 	}
 
@@ -90,9 +91,8 @@ func New(spec *Spec) (*File, error) {
 		name   string
 		values []string
 	}{
-		{name: "libraries", values: spec.Libraries},
-		{name: "defines", values: spec.Defines},
-		{name: "frameworks", values: spec.Frameworks},
+		{name: "Libs", values: spec.Libs},
+		{name: "Cflags", values: spec.Cflags},
 	}
 	for _, field := range fragments {
 		for _, value := range field.values {
@@ -105,36 +105,34 @@ func New(spec *Spec) (*File, error) {
 		}
 	}
 
-	libs := make([]string, 0, len(spec.LibraryDirs)+len(spec.Libraries)+2*len(spec.Frameworks))
-	for _, dir := range spec.LibraryDirs {
-		libs = append(libs, "-L${prefix}/"+shellquote.Join(dir))
-	}
-	for _, library := range spec.Libraries {
-		libs = append(libs, "-l"+shellquote.Join(library))
-	}
-	for _, framework := range spec.Frameworks {
-		libs = append(libs, "-framework", shellquote.Join(framework))
-	}
-
-	cflags := make([]string, 0, len(spec.IncludeDirs)+len(spec.Defines))
-	for _, dir := range spec.IncludeDirs {
-		cflags = append(cflags, "-I${prefix}/"+shellquote.Join(dir))
-	}
-	for _, define := range spec.Defines {
-		cflags = append(cflags, "-D"+shellquote.Join(define))
-	}
-
 	escapeLiteral := func(value string) string {
 		return strings.ReplaceAll(value, "${", "$${")
 	}
 
 	var out strings.Builder
-	out.WriteString("prefix=${pcfiledir}/../..\n\n")
+	for _, variable := range defaultVariables {
+		value := variable.value
+		if override, ok := spec.Variables[variable.name]; ok {
+			value = override
+		}
+		fmt.Fprintf(&out, "%s=%s\n", variable.name, value)
+	}
+	customVariables := make([]string, 0, len(spec.Variables))
+	for name := range spec.Variables {
+		if _, ok := defaultNames[name]; !ok {
+			customVariables = append(customVariables, name)
+		}
+	}
+	sort.Strings(customVariables)
+	for _, name := range customVariables {
+		fmt.Fprintf(&out, "%s=%s\n", name, spec.Variables[name])
+	}
+	out.WriteByte('\n')
 	fmt.Fprintf(&out, "Name: %s\n", escapeLiteral(spec.Name))
 	fmt.Fprintf(&out, "Description: %s\n", escapeLiteral(spec.Description))
 	fmt.Fprintf(&out, "Version: %s\n", escapeLiteral(spec.Version))
-	if spec.Homepage != "" {
-		fmt.Fprintf(&out, "URL: %s\n", escapeLiteral(spec.Homepage))
+	if spec.URL != "" {
+		fmt.Fprintf(&out, "URL: %s\n", escapeLiteral(spec.URL))
 	}
 	writeFragments := func(name string, fragments []string) {
 		out.WriteString(name)
@@ -145,8 +143,8 @@ func New(spec *Spec) (*File, error) {
 		}
 		out.WriteByte('\n')
 	}
-	writeFragments("Libs", libs)
-	writeFragments("Cflags", cflags)
+	writeFragments("Libs", spec.Libs)
+	writeFragments("Cflags", spec.Cflags)
 
 	return &File{data: []byte(out.String())}, nil
 }
