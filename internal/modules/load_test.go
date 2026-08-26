@@ -193,7 +193,7 @@ func TestResolveDeps_OnRequire_SlashInVersion(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "refs/heads/feature/foo"}
 
-	if _, err := resolveDeps(mod, modFS, frla, classfile.Matrix{}); err != nil {
+	if _, err := resolveDeps(mod, modFS, frla); err != nil {
 		t.Fatalf("resolveDeps failed for slash-containing version: %v", err)
 	}
 }
