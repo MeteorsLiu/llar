@@ -54,23 +54,17 @@ func New(spec *Spec) (*File, error) {
 		return nil, fmt.Errorf("pkgconfig: spec is required")
 	}
 
-	fields := []struct {
-		name     string
-		value    string
-		required bool
-	}{
-		{name: "name", value: spec.Name, required: true},
-		{name: "description", value: spec.Description, required: true},
-		{name: "version", value: spec.Version, required: true},
-		{name: "URL", value: spec.URL},
+	if err := validateLiteral("name", spec.Name, true); err != nil {
+		return nil, err
 	}
-	for _, field := range fields {
-		if field.required && field.value == "" {
-			return nil, fmt.Errorf("pkgconfig: %s is required", field.name)
-		}
-		if strings.ContainsAny(field.value, "\r\n") {
-			return nil, fmt.Errorf("pkgconfig: %s must be a single line", field.name)
-		}
+	if err := validateLiteral("description", spec.Description, true); err != nil {
+		return nil, err
+	}
+	if err := validateLiteral("version", spec.Version, true); err != nil {
+		return nil, err
+	}
+	if err := validateLiteral("URL", spec.URL, false); err != nil {
+		return nil, err
 	}
 
 	for name, value := range spec.Variables {
@@ -87,16 +81,11 @@ func New(spec *Spec) (*File, error) {
 		}
 	}
 
-	for _, field := range []struct {
-		name   string
-		values []string
-	}{
-		{name: "Libs", values: spec.Libs},
-		{name: "Cflags", values: spec.Cflags},
-	} {
-		if err := validateFragments(field.name, field.values); err != nil {
-			return nil, err
-		}
+	if err := validateFragments("Libs", spec.Libs); err != nil {
+		return nil, err
+	}
+	if err := validateFragments("Cflags", spec.Cflags); err != nil {
+		return nil, err
 	}
 
 	return &File{
@@ -108,6 +97,16 @@ func New(spec *Spec) (*File, error) {
 		libs:        fragments{public: slices.Clone(spec.Libs)},
 		cflags:      fragments{public: slices.Clone(spec.Cflags)},
 	}, nil
+}
+
+func validateLiteral(name, value string, required bool) error {
+	if required && value == "" {
+		return fmt.Errorf("pkgconfig: %s is required", name)
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("pkgconfig: %s must be a single line", name)
+	}
+	return nil
 }
 
 // Libs returns the linking fragments.
@@ -144,47 +143,38 @@ func validateFragments(name string, values []string) error {
 
 // WriteTo encodes the pkg-config file and writes it to w.
 func (f *File) WriteTo(w io.Writer) (n int64, err error) {
-	for _, field := range []struct {
-		name   string
-		values []string
-	}{
-		{name: "Libs.private", values: f.libs.private},
-		{name: "Libs.shared", values: f.libs.shared},
-		{name: "Cflags.private", values: f.cflags.private},
-		{name: "Cflags.shared", values: f.cflags.shared},
-	} {
-		if err := validateFragments(field.name, field.values); err != nil {
-			return 0, err
-		}
+	if err := validateFragments("Libs.private", f.libs.private); err != nil {
+		return 0, err
 	}
-
-	defaultVariables := []struct {
-		name  string
-		value string
-	}{
-		{name: "prefix", value: "${pcfiledir}/../.."},
-		{name: "exec_prefix", value: "${prefix}"},
-		{name: "libdir", value: "${prefix}/lib"},
-		{name: "includedir", value: "${prefix}/include"},
+	if err := validateFragments("Libs.shared", f.libs.shared); err != nil {
+		return 0, err
 	}
-	defaultNames := make(map[string]struct{}, len(defaultVariables))
-	for _, variable := range defaultVariables {
-		defaultNames[variable.name] = struct{}{}
+	if err := validateFragments("Cflags.private", f.cflags.private); err != nil {
+		return 0, err
+	}
+	if err := validateFragments("Cflags.shared", f.cflags.shared); err != nil {
+		return 0, err
 	}
 
 	var out strings.Builder
-	for _, variable := range defaultVariables {
-		value := variable.value
-		if override, ok := f.variables[variable.name]; ok {
+	writeVariable := func(name, value string) {
+		if override, ok := f.variables[name]; ok {
 			value = override
 		}
-		fmt.Fprintf(&out, "%s=%s\n", variable.name, value)
+		fmt.Fprintf(&out, "%s=%s\n", name, value)
 	}
+	writeVariable("prefix", "${pcfiledir}/../..")
+	writeVariable("exec_prefix", "${prefix}")
+	writeVariable("libdir", "${prefix}/lib")
+	writeVariable("includedir", "${prefix}/include")
+
 	customVariables := make([]string, 0, len(f.variables))
 	for name := range f.variables {
-		if _, ok := defaultNames[name]; !ok {
-			customVariables = append(customVariables, name)
+		switch name {
+		case "prefix", "exec_prefix", "libdir", "includedir":
+			continue
 		}
+		customVariables = append(customVariables, name)
 	}
 	sort.Strings(customVariables)
 	for _, name := range customVariables {
