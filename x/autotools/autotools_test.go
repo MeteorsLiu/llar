@@ -132,20 +132,40 @@ func TestUsePartialDirs(t *testing.T) {
 	}
 }
 
+func TestUseIgnoresPkgConfigError(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "lib", "pkgconfig"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var prefix string
+	err := execbroker.Do(execbroker.Scope{Env: []string{"PKG_CONFIG_PATH=\x00"}}, func() error {
+		New("", "", "").Use(root)
+		prefix = execbroker.Getenv("CMAKE_PREFIX_PATH")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefix != root {
+		t.Fatalf("CMAKE_PREFIX_PATH = %q, want %q", prefix, root)
+	}
+}
+
 func TestSysroot(t *testing.T) {
 	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
-		t.Setenv(key, "-existing")
+		setenv(t, key, "-existing")
 	}
 	for _, key := range []string{"PKG_CONFIG_SYSROOT_DIR", "PKG_CONFIG_LIBDIR"} {
-		value, ok := os.LookupEnv(key)
-		if err := os.Unsetenv(key); err != nil {
+		value, ok := execbroker.LookupEnv(key)
+		if err := execbroker.Unsetenv(key); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
 			if ok {
-				_ = os.Setenv(key, value)
+				_ = execbroker.Setenv(key, value)
 			} else {
-				_ = os.Unsetenv(key)
+				_ = execbroker.Unsetenv(key)
 			}
 		})
 	}
@@ -153,12 +173,12 @@ func TestSysroot(t *testing.T) {
 	a.Sysroot("/sdk")
 
 	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
-		if got, want := os.Getenv(key), "-existing --sysroot=/sdk -isysroot/sdk"; got != want {
+		if got, want := execbroker.Getenv(key), "-existing --sysroot=/sdk -isysroot/sdk"; got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
 	for _, key := range []string{"PKG_CONFIG_SYSROOT_DIR", "PKG_CONFIG_LIBDIR"} {
-		if got, ok := os.LookupEnv(key); ok {
+		if got, ok := execbroker.LookupEnv(key); ok {
 			t.Errorf("%s = %q, want unset", key, got)
 		}
 	}

@@ -98,13 +98,13 @@ func TestUsePartialDirs(t *testing.T) {
 }
 
 func TestUseMultipleRoots(t *testing.T) {
-	t.Setenv("CMAKE_FIND_ROOT_PATH", "")
+	setenv(t, "CMAKE_FIND_ROOT_PATH", "")
 	c := New("", "", "")
 	c.Use("/deps/one")
 	c.Use("/deps/two")
 
 	sep := string(os.PathListSeparator)
-	if got, want := os.Getenv("CMAKE_FIND_ROOT_PATH"), "/deps/two"+sep+"/deps/one"; got != want {
+	if got, want := execbroker.Getenv("CMAKE_FIND_ROOT_PATH"), "/deps/two"+sep+"/deps/one"; got != want {
 		t.Fatalf("CMAKE_FIND_ROOT_PATH = %q, want %q", got, want)
 	}
 }

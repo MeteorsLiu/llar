@@ -136,7 +136,7 @@ func (c *CMake) Configure(args ...string) {
 	if c.buildType != "" {
 		cmakeArgs = append(cmakeArgs, "-DCMAKE_BUILD_TYPE:STRING="+c.buildType)
 	}
-	if roots := os.Getenv("CMAKE_FIND_ROOT_PATH"); roots != "" {
+	if roots := execbroker.Getenv("CMAKE_FIND_ROOT_PATH"); roots != "" {
 		cmakeArgs = append(cmakeArgs, "-DCMAKE_FIND_ROOT_PATH:STRING="+strings.Join(filepath.SplitList(roots), ";"))
 	}
 	cmakeArgs = append(cmakeArgs, c.definesArgs()...)
