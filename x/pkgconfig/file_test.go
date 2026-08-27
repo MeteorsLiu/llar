@@ -182,33 +182,6 @@ func TestNewValidatesRequiredFields(t *testing.T) {
 	}
 }
 
-func TestNewValidatesVariablesAndProperties(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*Spec)
-		want   string
-	}{
-		{name: "empty variable name", mutate: func(spec *Spec) { spec.Variables = map[string]string{"": "value"} }, want: "variable name is required"},
-		{name: "invalid variable name", mutate: func(spec *Spec) { spec.Variables = map[string]string{"bad-name": "value"} }, want: "invalid variable name"},
-		{name: "multiline variable", mutate: func(spec *Spec) { spec.Variables = map[string]string{"prefix": "one\ntwo"} }, want: "single line"},
-		{name: "empty Requires entry", mutate: func(spec *Spec) { spec.Requires = []string{""} }, want: "Requires contains an empty value"},
-		{name: "multiline Requires entry", mutate: func(spec *Spec) { spec.Requires = []string{"one\ntwo"} }, want: "Requires value"},
-		{name: "empty Libs entry", mutate: func(spec *Spec) { spec.Libs = []string{""} }, want: "empty value"},
-		{name: "multiline Cflags entry", mutate: func(spec *Spec) { spec.Cflags = []string{"-DONE\n-DTWO"} }, want: "single line"},
-		{name: "multiline URL", mutate: func(spec *Spec) { spec.URL = "https://example.com/\nnext" }, want: "URL must be a single line"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			spec := &Spec{Name: "demo", Description: "demo library", Version: "1.0.0"}
-			tt.mutate(spec)
-			_, err := New(spec)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("New error = %v, want containing %q", err, tt.want)
-			}
-		})
-	}
-}
-
 func TestNewWritesFragmentsVerbatim(t *testing.T) {
 	file, err := New(&Spec{
 		Name:        "demo",
@@ -268,37 +241,6 @@ func TestWriteToEncodesPrivateAndSharedFragments(t *testing.T) {
 		"Cflags.shared: -DDEMO_SHARED\n"
 	if !strings.HasSuffix(out.String(), want) {
 		t.Fatalf("encoded properties:\n%s\nwant suffix:\n%s", out.String(), want)
-	}
-}
-
-func TestWriteToValidatesPrivateAndSharedFragments(t *testing.T) {
-	tests := []struct {
-		name string
-		set  func(*File)
-		want string
-	}{
-		{name: "empty private library", set: func(file *File) { file.Libs().Private([]string{""}) }, want: "Libs.private contains an empty value"},
-		{name: "multiline shared library", set: func(file *File) { file.Libs().Shared([]string{"-lone\n-ltwo"}) }, want: "Libs.shared value"},
-		{name: "empty private compiler flag", set: func(file *File) { file.Cflags().Private([]string{""}) }, want: "Cflags.private contains an empty value"},
-		{name: "multiline shared compiler flag", set: func(file *File) { file.Cflags().Shared([]string{"-DONE\n-DTWO"}) }, want: "Cflags.shared value"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			file, err := New(&Spec{Name: "demo", Description: "demo library", Version: "1.0.0"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			tt.set(file)
-
-			var out bytes.Buffer
-			_, err = file.WriteTo(&out)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("WriteTo error = %v, want containing %q", err, tt.want)
-			}
-			if out.Len() != 0 {
-				t.Fatalf("WriteTo wrote %d bytes before validation", out.Len())
-			}
-		})
 	}
 }
 

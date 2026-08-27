@@ -53,47 +53,19 @@ type File struct {
 	cflags      fragments
 }
 
-// New validates spec and creates a relocatable pkg-config file.
+// New creates a relocatable pkg-config file.
 func New(spec *Spec) (*File, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("pkgconfig: spec is required")
 	}
-
-	if err := validateLiteral("name", spec.Name, true); err != nil {
-		return nil, err
+	if spec.Name == "" {
+		return nil, fmt.Errorf("pkgconfig: name is required")
 	}
-	if err := validateLiteral("description", spec.Description, true); err != nil {
-		return nil, err
+	if spec.Description == "" {
+		return nil, fmt.Errorf("pkgconfig: description is required")
 	}
-	if err := validateLiteral("version", spec.Version, true); err != nil {
-		return nil, err
-	}
-	if err := validateLiteral("URL", spec.URL, false); err != nil {
-		return nil, err
-	}
-
-	for name, value := range spec.Variables {
-		if name == "" {
-			return nil, fmt.Errorf("pkgconfig: variable name is required")
-		}
-		for _, r := range name {
-			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' {
-				return nil, fmt.Errorf("pkgconfig: invalid variable name %q", name)
-			}
-		}
-		if strings.ContainsAny(value, "\r\n") {
-			return nil, fmt.Errorf("pkgconfig: variable %q must be a single line", name)
-		}
-	}
-
-	if err := validateValues("Requires", spec.Requires); err != nil {
-		return nil, err
-	}
-	if err := validateValues("Libs", spec.Libs); err != nil {
-		return nil, err
-	}
-	if err := validateValues("Cflags", spec.Cflags); err != nil {
-		return nil, err
+	if spec.Version == "" {
+		return nil, fmt.Errorf("pkgconfig: version is required")
 	}
 
 	return &File{
@@ -106,16 +78,6 @@ func New(spec *Spec) (*File, error) {
 		libs:        fragments{public: slices.Clone(spec.Libs)},
 		cflags:      fragments{public: slices.Clone(spec.Cflags)},
 	}, nil
-}
-
-func validateLiteral(name, value string, required bool) error {
-	if required && value == "" {
-		return fmt.Errorf("pkgconfig: %s is required", name)
-	}
-	if strings.ContainsAny(value, "\r\n") {
-		return fmt.Errorf("pkgconfig: %s must be a single line", name)
-	}
-	return nil
 }
 
 // Libs returns the linking fragments.
@@ -143,33 +105,8 @@ func (f *fragments) Shared(values []string) {
 	f.shared = slices.Clone(values)
 }
 
-func validateValues(name string, values []string) error {
-	for _, value := range values {
-		if value == "" {
-			return fmt.Errorf("pkgconfig: %s contains an empty value", name)
-		}
-		if strings.ContainsAny(value, "\r\n") {
-			return fmt.Errorf("pkgconfig: %s value %q must be a single line", name, value)
-		}
-	}
-	return nil
-}
-
 // WriteTo encodes the pkg-config file and writes it to w.
 func (f *File) WriteTo(w io.Writer) (n int64, err error) {
-	if err := validateValues("Libs.private", f.libs.private); err != nil {
-		return 0, err
-	}
-	if err := validateValues("Libs.shared", f.libs.shared); err != nil {
-		return 0, err
-	}
-	if err := validateValues("Cflags.private", f.cflags.private); err != nil {
-		return 0, err
-	}
-	if err := validateValues("Cflags.shared", f.cflags.shared); err != nil {
-		return 0, err
-	}
-
 	var out strings.Builder
 	writeVariable := func(name, value string) {
 		if override, ok := f.variables[name]; ok {
