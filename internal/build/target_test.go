@@ -28,12 +28,15 @@ func (t *testTarget) Use(command Command) Patch {
 
 func TestTargetMiddleware(t *testing.T) {
 	target := new(testTarget)
-	got := targetMiddleware(target)(execbroker.Request{
+	got, err := targetMiddleware(target)(execbroker.Request{
 		Name: "cc",
 		Args: []string{"-c", "a.c"},
 		Env:  []string{"CFLAGS=-O2"},
 		Dir:  "/src",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Name != "/toolchain/cc" {
 		t.Fatalf("Name = %q", got.Name)
 	}

@@ -28,7 +28,7 @@ type Target interface {
 }
 
 func targetMiddleware(target Target) execbroker.Middleware {
-	return func(req execbroker.Request) execbroker.Request {
+	return func(req execbroker.Request) (execbroker.Request, error) {
 		env := req.Env
 		if env == nil {
 			env = os.Environ()
@@ -51,6 +51,6 @@ func targetMiddleware(target Target) execbroker.Middleware {
 		if patch.Env != nil {
 			req.Env = append([]string(nil), patch.Env...)
 		}
-		return req
+		return req, nil
 	}
 }
