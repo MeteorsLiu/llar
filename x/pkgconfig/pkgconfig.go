@@ -12,18 +12,15 @@ import (
 
 // Use makes pkg-config metadata installed at root available to subsequent
 // queries.
-func Use(root string) error {
+func Use(root string) {
 	dir := filepath.Join(root, "lib", "pkgconfig")
 	if _, err := os.Stat(dir); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+		return
 	}
 	if current := execbroker.Getenv("PKG_CONFIG_PATH"); current != "" {
 		dir += string(os.PathListSeparator) + current
 	}
-	return execbroker.Setenv("PKG_CONFIG_PATH", dir)
+	_ = execbroker.Setenv("PKG_CONFIG_PATH", dir)
 }
 
 // Lookup returns the compiler and linker flags for name.

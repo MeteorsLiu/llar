@@ -45,7 +45,7 @@ func (a *AutoTools) Use(root string) {
 	includeDir := filepath.Join(root, "include")
 	libDir := filepath.Join(root, "lib")
 
-	_ = pkgconfig.Use(root)
+	pkgconfig.Use(root)
 	prependPath("CMAKE_PREFIX_PATH", root)
 	if _, err := os.Stat(includeDir); err == nil {
 		prependPath("CMAKE_INCLUDE_PATH", includeDir)

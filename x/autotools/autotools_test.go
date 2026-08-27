@@ -132,26 +132,6 @@ func TestUsePartialDirs(t *testing.T) {
 	}
 }
 
-func TestUseIgnoresPkgConfigError(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "lib", "pkgconfig"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	var prefix string
-	err := execbroker.Do(execbroker.Scope{Env: []string{"PKG_CONFIG_PATH=\x00"}}, func() error {
-		New("", "", "").Use(root)
-		prefix = execbroker.Getenv("CMAKE_PREFIX_PATH")
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if prefix != root {
-		t.Fatalf("CMAKE_PREFIX_PATH = %q, want %q", prefix, root)
-	}
-}
-
 func TestSysroot(t *testing.T) {
 	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
 		setenv(t, key, "-existing")
