@@ -274,7 +274,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// Fast path: cache hit and no OnTest to run. Skip source clone
 		// and OnBuild entirely.
 		if cacheHit && !testThisMod {
-			return Result{Metadata: entry.Metadata, OutputDir: installDir}, nil
+			return Result{Module: modVer, Metadata: entry.Metadata, OutputDir: installDir}, nil
 		}
 
 		// At this point we need to run OnBuild, OnTest, or both. All of
@@ -282,7 +282,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// set those up uniformly regardless of cache state.
 
 		// TODO(MeteorsLiu): Source cache dir (belongs in the vcs layer)
-		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
+		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), strings.ReplaceAll(mod.Version, "/", "-")))
 		if err != nil {
 			return Result{}, err
 		}
@@ -367,7 +367,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			metadata = entry.Metadata
 		}
 
-		return Result{Metadata: metadata, OutputDir: installDir}, nil
+		return Result{Module: modVer, Metadata: metadata, OutputDir: installDir}, nil
 	}
 
 	var results []Result
