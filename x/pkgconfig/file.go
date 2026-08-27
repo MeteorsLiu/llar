@@ -24,6 +24,10 @@ type Spec struct {
 	// URL: A URL to a webpage for the package. This is used to recommend where
 	// newer versions of the package can be acquired.
 	URL string
+	// Requires: Required dependencies that must be met for the package to be
+	// usable. All dependencies must be satisfied or the pkg-config
+	// implementation must not use the package.
+	Requires []string
 	// Libs: Required linking flags for this package.
 	Libs []string
 	// Cflags: Required compiler flags. These flags are always used, regardless
@@ -44,6 +48,7 @@ type File struct {
 	description string
 	version     string
 	url         string
+	requires    []string
 	libs        fragments
 	cflags      fragments
 }
@@ -81,10 +86,13 @@ func New(spec *Spec) (*File, error) {
 		}
 	}
 
-	if err := validateFragments("Libs", spec.Libs); err != nil {
+	if err := validateValues("Requires", spec.Requires); err != nil {
 		return nil, err
 	}
-	if err := validateFragments("Cflags", spec.Cflags); err != nil {
+	if err := validateValues("Libs", spec.Libs); err != nil {
+		return nil, err
+	}
+	if err := validateValues("Cflags", spec.Cflags); err != nil {
 		return nil, err
 	}
 
@@ -94,6 +102,7 @@ func New(spec *Spec) (*File, error) {
 		description: spec.Description,
 		version:     spec.Version,
 		url:         spec.URL,
+		requires:    slices.Clone(spec.Requires),
 		libs:        fragments{public: slices.Clone(spec.Libs)},
 		cflags:      fragments{public: slices.Clone(spec.Cflags)},
 	}, nil
@@ -129,7 +138,7 @@ func (f *fragments) Shared(values []string) {
 	f.shared = slices.Clone(values)
 }
 
-func validateFragments(name string, values []string) error {
+func validateValues(name string, values []string) error {
 	for _, value := range values {
 		if value == "" {
 			return fmt.Errorf("pkgconfig: %s contains an empty value", name)
@@ -143,16 +152,16 @@ func validateFragments(name string, values []string) error {
 
 // WriteTo encodes the pkg-config file and writes it to w.
 func (f *File) WriteTo(w io.Writer) (n int64, err error) {
-	if err := validateFragments("Libs.private", f.libs.private); err != nil {
+	if err := validateValues("Libs.private", f.libs.private); err != nil {
 		return 0, err
 	}
-	if err := validateFragments("Libs.shared", f.libs.shared); err != nil {
+	if err := validateValues("Libs.shared", f.libs.shared); err != nil {
 		return 0, err
 	}
-	if err := validateFragments("Cflags.private", f.cflags.private); err != nil {
+	if err := validateValues("Cflags.private", f.cflags.private); err != nil {
 		return 0, err
 	}
-	if err := validateFragments("Cflags.shared", f.cflags.shared); err != nil {
+	if err := validateValues("Cflags.shared", f.cflags.shared); err != nil {
 		return 0, err
 	}
 
@@ -201,6 +210,9 @@ func (f *File) WriteTo(w io.Writer) (n int64, err error) {
 			out.WriteString(strings.Join(values, " "))
 		}
 		out.WriteByte('\n')
+	}
+	if len(f.requires) > 0 {
+		fmt.Fprintf(&out, "Requires: %s\n", strings.Join(f.requires, ", "))
 	}
 	writeFragments("Libs", f.libs.public, true)
 	writeFragments("Libs.private", f.libs.private, false)

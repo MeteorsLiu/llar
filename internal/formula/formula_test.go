@@ -122,7 +122,8 @@ func TestFormulaPkgConfigFileAutoImport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generated pkg-config file: %v", err)
 	}
-	wantProperties := "Libs: -L${libdir} -lllar_formula_pkgconfig_test\n" +
+	wantProperties := "Requires: llar-formula-pkgconfig-dependency >= 1.0.0\n" +
+		"Libs: -L${libdir} -lllar_formula_pkgconfig_test\n" +
 		"Libs.private: -lm\n" +
 		"Libs.shared: -lllar_formula_shared\n" +
 		"Cflags: -I${includedir} -DLLAR_FORMULA_PKGCONFIG_TEST\n" +

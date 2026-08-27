@@ -46,6 +46,7 @@ func TestNewEncodesFormulaShapes(t *testing.T) {
 				Name:        "datetime",
 				Description: "A simple Date and time library built in C++",
 				Version:     "1.0.2",
+				Requires:    []string{"zlib >= 1.2.13", "threads"},
 				Libs:        []string{"-L${libdir}", "-ldatetime", "-lm", "-lpthread", "-ldl"},
 				Cflags:      []string{"-I${includedir}", "-DDATETIME_STATIC"},
 			},
@@ -56,6 +57,7 @@ func TestNewEncodesFormulaShapes(t *testing.T) {
 				"Name: datetime\n" +
 				"Description: A simple Date and time library built in C++\n" +
 				"Version: 1.0.2\n" +
+				"Requires: zlib >= 1.2.13, threads\n" +
 				"Libs: -L${libdir} -ldatetime -lm -lpthread -ldl\n" +
 				"Cflags: -I${includedir} -DDATETIME_STATIC\n",
 		},
@@ -189,6 +191,8 @@ func TestNewValidatesVariablesAndProperties(t *testing.T) {
 		{name: "empty variable name", mutate: func(spec *Spec) { spec.Variables = map[string]string{"": "value"} }, want: "variable name is required"},
 		{name: "invalid variable name", mutate: func(spec *Spec) { spec.Variables = map[string]string{"bad-name": "value"} }, want: "invalid variable name"},
 		{name: "multiline variable", mutate: func(spec *Spec) { spec.Variables = map[string]string{"prefix": "one\ntwo"} }, want: "single line"},
+		{name: "empty Requires entry", mutate: func(spec *Spec) { spec.Requires = []string{""} }, want: "Requires contains an empty value"},
+		{name: "multiline Requires entry", mutate: func(spec *Spec) { spec.Requires = []string{"one\ntwo"} }, want: "Requires value"},
 		{name: "empty Libs entry", mutate: func(spec *Spec) { spec.Libs = []string{""} }, want: "empty value"},
 		{name: "multiline Cflags entry", mutate: func(spec *Spec) { spec.Cflags = []string{"-DONE\n-DTWO"} }, want: "single line"},
 		{name: "multiline URL", mutate: func(spec *Spec) { spec.URL = "https://example.com/\nnext" }, want: "URL must be a single line"},
