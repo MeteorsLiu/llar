@@ -95,7 +95,7 @@ onBuild ctx => {
 	c.install
 
 	// Extract link metadata from pkg-config
-	pkgconfig.use installDir
+	pkgconfig.use(installDir)!
 	metadata := pkgconfig.libs("freetype2")!
 	ctx.setMetadata metadata
 }

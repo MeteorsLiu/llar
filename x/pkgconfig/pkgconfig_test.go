@@ -34,7 +34,9 @@ func TestUse(t *testing.T) {
 	}
 	setenv(t, "PKG_CONFIG_PATH", "/existing")
 
-	Use(root)
+	if err := Use(root); err != nil {
+		t.Fatal(err)
+	}
 
 	if got, want := execbroker.Getenv("PKG_CONFIG_PATH"), dir+string(os.PathListSeparator)+"/existing"; got != want {
 		t.Fatalf("PKG_CONFIG_PATH = %q, want %q", got, want)
@@ -44,10 +46,27 @@ func TestUse(t *testing.T) {
 func TestUseIgnoresMissingDirectory(t *testing.T) {
 	setenv(t, "PKG_CONFIG_PATH", "/existing")
 
-	Use(t.TempDir())
+	if err := Use(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := execbroker.Getenv("PKG_CONFIG_PATH"); got != "/existing" {
 		t.Fatalf("PKG_CONFIG_PATH = %q, want unchanged", got)
+	}
+}
+
+func TestUseReturnsSetenvError(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "lib", "pkgconfig")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := execbroker.Do(execbroker.Scope{Env: []string{"PKG_CONFIG_PATH=\x00"}}, func() error {
+		return Use(root)
+	})
+	if err == nil {
+		t.Fatal("Use error = nil")
 	}
 }
 
