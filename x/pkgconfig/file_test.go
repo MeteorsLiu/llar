@@ -245,6 +245,12 @@ func TestWriteToEncodesPrivateAndSharedFragments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got, want := file.Libs().String(), "-L${libdir} -ldemo"; got != want {
+		t.Fatalf("Libs().String() = %q, want %q", got, want)
+	}
+	if got, want := file.Cflags().String(), "-I${includedir}"; got != want {
+		t.Fatalf("Cflags().String() = %q, want %q", got, want)
+	}
 	file.Libs().Private([]string{"-lm"})
 	file.Libs().Shared([]string{"-ldemo-runtime"})
 	file.Cflags().Private([]string{"-DDEMO_STATIC"})

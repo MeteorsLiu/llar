@@ -128,6 +128,11 @@ func (f *File) Cflags() *fragments {
 	return &f.cflags
 }
 
+// String returns the public fragments in pkg-config syntax.
+func (f *fragments) String() string {
+	return strings.Join(f.public, " ")
+}
+
 // Private sets fragments used for static compilation or linking only.
 func (f *fragments) Private(values []string) {
 	f.private = slices.Clone(values)

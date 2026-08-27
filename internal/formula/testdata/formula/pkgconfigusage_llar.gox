@@ -32,6 +32,12 @@ onBuild ctx => {
 	pc.libs.shared ["-lllar_formula_shared"]
 	pc.cflags.private ["-DLLAR_FORMULA_STATIC"]
 	pc.cflags.shared ["-DLLAR_FORMULA_SHARED"]
+	if "${pc.libs}" != "-L$${libdir} -lllar_formula_pkgconfig_test" {
+		panic "unexpected public Libs fragments"
+	}
+	if "${pc.cflags}" != "-I$${includedir} -DLLAR_FORMULA_PKGCONFIG_TEST" {
+		panic "unexpected public Cflags fragments"
+	}
 
 	out := os.create(filepath.join(pcDir, "llar-formula-pkgconfig-test.pc"))!
 	pc.writeTo(out)!
