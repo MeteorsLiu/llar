@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package vcs provides VCS-backed version comparison to comparator formulas.
-package vcs
+// Package git provides Git-backed version comparison to comparator formulas.
+package git
 
 import (
 	"fmt"
@@ -32,8 +32,8 @@ type comparableRevision struct {
 	commitTime time.Time
 }
 
-// CompareFunc compares two versions of the same module using repository
-// history and compareTag to order tags.
+// CompareFunc compares two versions of the same module using Git history and
+// compareTag to order tags.
 func CompareFunc(a, b module.Version, compareTag func(a, b string) int) int {
 	if a.Version == b.Version {
 		return 0

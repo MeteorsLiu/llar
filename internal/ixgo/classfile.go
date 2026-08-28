@@ -26,8 +26,8 @@ func init() {
 				Path: "github.com/goplus/llar/x/gnu",
 			},
 			{
-				Name: "vcs",
-				Path: "github.com/goplus/llar/x/vcs",
+				Name: "git",
+				Path: "github.com/goplus/llar/x/git",
 			},
 		},
 	})

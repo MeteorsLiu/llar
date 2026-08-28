@@ -1,9 +1,9 @@
 // export by github.com/goplus/ixgo/cmd/qexp
 
-package vcs
+package git
 
 import (
-	q "github.com/goplus/llar/x/vcs"
+	q "github.com/goplus/llar/x/git"
 
 	"reflect"
 
@@ -12,8 +12,8 @@ import (
 
 func init() {
 	ixgo.RegisterPackage(&ixgo.Package{
-		Name: "vcs",
-		Path: "github.com/goplus/llar/x/vcs",
+		Name: "git",
+		Path: "github.com/goplus/llar/x/git",
 		Deps: map[string]string{
 			"github.com/goplus/llar/mod/module": "module",
 		},
