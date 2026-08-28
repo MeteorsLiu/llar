@@ -5,7 +5,10 @@
 package git
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +155,269 @@ func TestCompareFuncGitHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestCompareFuncSameVersion(t *testing.T) {
+	if got := CompareFunc(module.Version{Path: "owner/repo", Version: "same"}, module.Version{Path: "owner/repo", Version: "same"}, semver.Compare); got != 0 {
+		t.Fatalf("CompareFunc(same, same) = %d, want 0", got)
+	}
+}
+
+func TestCompareFuncPanicsOnTempDirError(t *testing.T) {
+	tmpRoot := t.TempDir()
+	tmpFile := filepath.Join(tmpRoot, "not-a-directory")
+	if err := os.WriteFile(tmpFile, []byte("file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", tmpFile)
+
+	mustPanicContains(t, "create VCS history directory", func() {
+		CompareFunc(module.Version{Path: "owner/repo", Version: "left"}, module.Version{Path: "owner/repo", Version: "right"}, semver.Compare)
+	})
+}
+
+func TestCompareFuncPanicsOnHistoryErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		arg  string
+		want string
+	}{
+		{name: "init", arg: "init", want: "prepare VCS history"},
+		{name: "remote add", arg: "remote", want: "prepare VCS history"},
+		{name: "fetch", arg: "fetch", want: "prepare VCS history"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantErr := errors.New("injected git failure")
+			err := execbroker.Do(execbroker.Scope{
+				Middleware: func(req execbroker.Request) (execbroker.Request, error) {
+					if req.Name == "git" && len(req.Args) > 0 && req.Args[0] == tt.arg {
+						return req, wantErr
+					}
+					return req, nil
+				},
+			}, func() error {
+				mustPanicContains(t, tt.want, func() {
+					CompareFunc(module.Version{Path: "owner/repo", Version: "left"}, module.Version{Path: "owner/repo", Version: "right"}, semver.Compare)
+				})
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCompareFuncPanicsOnRevisionErrors(t *testing.T) {
+	dir := newHistoryRepo(t)
+
+	t.Run("left revision", func(t *testing.T) {
+		wantErr := errors.New("injected left revision failure")
+		err := execbroker.Do(execbroker.Scope{
+			Middleware: func(req execbroker.Request) (execbroker.Request, error) {
+				if req.Name == "git" && len(req.Args) > 1 && req.Args[0] == "remote" && req.Args[1] == "add" {
+					req.Args[3] = dir
+				}
+				if req.Name == "git" && len(req.Args) > 0 && req.Args[0] == "rev-parse" {
+					return req, wantErr
+				}
+				return req, nil
+			},
+		}, func() error {
+			mustPanicContains(t, "resolve VCS version owner/repo@v1.0.0", func() {
+				CompareFunc(module.Version{Path: "owner/repo", Version: "v1.0.0"}, module.Version{Path: "owner/repo", Version: "right"}, semver.Compare)
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("right revision", func(t *testing.T) {
+		err := execbroker.Do(execbroker.Scope{
+			Middleware: func(req execbroker.Request) (execbroker.Request, error) {
+				if req.Name == "git" && len(req.Args) > 1 && req.Args[0] == "remote" && req.Args[1] == "add" {
+					req.Args[3] = dir
+				}
+				return req, nil
+			},
+		}, func() error {
+			mustPanicContains(t, "resolve VCS version owner/repo@missing", func() {
+				CompareFunc(module.Version{Path: "owner/repo", Version: "v1.0.0"}, module.Version{Path: "owner/repo", Version: "missing"}, semver.Compare)
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestResolveRevisionErrors(t *testing.T) {
+	dir := newHistoryRepo(t)
+
+	tests := []struct {
+		name     string
+		match    func([]string) bool
+		rewrite  func(*execbroker.Request)
+		wantText string
+	}{
+		{
+			name: "resolve commit",
+			match: func(args []string) bool {
+				return len(args) > 0 && args[0] == "rev-parse"
+			},
+			wantText: "injected failure",
+		},
+		{
+			name: "show",
+			match: func(args []string) bool {
+				return len(args) > 0 && args[0] == "show"
+			},
+			wantText: "injected failure",
+		},
+		{
+			name: "invalid timestamp",
+			match: func(args []string) bool {
+				return len(args) > 0 && args[0] == "show"
+			},
+			rewrite: func(req *execbroker.Request) {
+				req.Name = "printf"
+				req.Args = []string{"not-a-timestamp"}
+			},
+			wantText: "parse commit time",
+		},
+		{
+			name: "merged tags",
+			match: func(args []string) bool {
+				return len(args) >= 2 && args[0] == "tag" && args[1] == "--merged"
+			},
+			wantText: "injected failure",
+		},
+		{
+			name: "tags at commit",
+			match: func(args []string) bool {
+				return len(args) >= 2 && args[0] == "tag" && args[1] == "--points-at"
+			},
+			wantText: "injected failure",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantErr := errors.New("injected failure")
+			err := execbroker.Do(execbroker.Scope{
+				Middleware: func(req execbroker.Request) (execbroker.Request, error) {
+					if req.Name == "git" && tt.match(req.Args) {
+						if tt.rewrite != nil {
+							tt.rewrite(&req)
+							return req, nil
+						}
+						return req, wantErr
+					}
+					return req, nil
+				},
+			}, func() error {
+				if _, err := resolveRevision(dir, "v1.0.0"); err == nil || !strings.Contains(err.Error(), tt.wantText) {
+					t.Fatalf("resolveRevision error = %v, want %q", err, tt.wantText)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestResolveCommitMissingRef(t *testing.T) {
+	dir := newHistoryRepo(t)
+	if _, _, err := resolveCommit(dir, "missing"); err == nil {
+		t.Fatal("resolveCommit succeeded for missing ref")
+	}
+}
+
+func TestFetchHistoryErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		arg  string
+	}{
+		{name: "init", arg: "init"},
+		{name: "remote add", arg: "remote"},
+		{name: "fetch", arg: "fetch"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantErr := errors.New("injected fetch failure")
+			err := execbroker.Do(execbroker.Scope{
+				Middleware: func(req execbroker.Request) (execbroker.Request, error) {
+					if req.Name == "git" && len(req.Args) > 0 && req.Args[0] == tt.arg {
+						return req, wantErr
+					}
+					return req, nil
+				},
+			}, func() error {
+				if err := fetchHistory(t.TempDir(), "owner/repo"); err == nil {
+					t.Fatal("fetchHistory succeeded")
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestGitLinesEmptyOutput(t *testing.T) {
+	err := execbroker.Do(execbroker.Scope{
+		Middleware: func(req execbroker.Request) (execbroker.Request, error) {
+			if req.Name == "git" {
+				req.Name = "printf"
+				req.Args = []string{""}
+			}
+			return req, nil
+		},
+	}, func() error {
+		lines, err := gitLines(t.TempDir(), "tag")
+		if err != nil {
+			return err
+		}
+		if lines != nil {
+			t.Fatalf("gitLines returned %#v, want nil", lines)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newHistoryRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	mustRunGit(t, dir, nil, "init")
+	mustRunGit(t, dir, nil, "config", "user.name", "LLAR Test")
+	mustRunGit(t, dir, nil, "config", "user.email", "llar@example.com")
+	commitFile(t, dir, "first\n", "2026-01-02T03:04:05Z")
+	mustRunGit(t, dir, nil, "tag", "v1.0.0")
+	return dir
+}
+
+func mustPanicContains(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("call did not panic, want %q", want)
+		}
+		if !strings.Contains(fmt.Sprint(recovered), want) {
+			t.Fatalf("panic = %v, want it to contain %q", recovered, want)
+		}
+	}()
+	fn()
 }
 
 func commitFile(t *testing.T, dir, content, date string) string {
