@@ -154,6 +154,27 @@ func TestCompareFuncGitHistory(t *testing.T) {
 	}
 }
 
+func TestIntegrationCompareFuncRealRepo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real repo test in short mode")
+	}
+
+	const (
+		path       = "madler/zlib"
+		tag        = "v1.3.1"
+		descendant = "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
+	)
+
+	left := module.Version{Path: path, Version: tag}
+	right := module.Version{Path: path, Version: descendant}
+	if got := CompareFunc(left, right, semver.Compare); got >= 0 {
+		t.Fatalf("CompareFunc(%s, %s) = %d, want < 0", tag, descendant, got)
+	}
+	if got := CompareFunc(right, left, semver.Compare); got <= 0 {
+		t.Fatalf("CompareFunc(%s, %s) = %d, want > 0", descendant, tag, got)
+	}
+}
+
 func commitFile(t *testing.T, dir, content, date string) string {
 	t.Helper()
 	if err := os.WriteFile(dir+"/source.txt", []byte(content), 0644); err != nil {
