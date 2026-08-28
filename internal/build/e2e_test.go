@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/internal/formula/repo"
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
@@ -437,23 +437,7 @@ func TestE2E_RealLibpngCommitDependencyBuild(t *testing.T) {
 	}
 
 	const zlibCommit = "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
-	formulaDir := t.TempDir()
-	if err := os.CopyFS(formulaDir, os.DirFS(testFormulaDir)); err != nil {
-		t.Fatalf("copy formula fixtures: %v", err)
-	}
-	libpngFormula := filepath.Join(formulaDir, "pnggroup", "libpng", "1.0.0", "Libpng_llar.gox")
-	content, err := os.ReadFile(libpngFormula)
-	if err != nil {
-		t.Fatalf("read libpng formula: %v", err)
-	}
-	contentText := strings.Replace(string(content), `deps.require "madler/zlib", "v1.2.11"`, `deps.require "madler/zlib", "`+zlibCommit+`"`, 1)
-	if contentText == string(content) {
-		t.Fatal("libpng formula did not contain the expected zlib tag dependency")
-	}
-	if err := os.WriteFile(libpngFormula, []byte(contentText), 0644); err != nil {
-		t.Fatalf("write libpng formula: %v", err)
-	}
-	store := repo.New(formulaDir, newMockRepo(formulaDir))
+	store := setupTestStore(t)
 
 	matrix := runtime.GOARCH + "-" + runtime.GOOS
 	workspaceDir := t.TempDir()
@@ -467,7 +451,12 @@ func TestE2E_RealLibpngCommitDependencyBuild(t *testing.T) {
 
 	main := module.Version{Path: "pnggroup/libpng", Version: "v1.6.47"}
 	ctx := context.Background()
-	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	mods, err := modules.Load(ctx, main, modules.Options{
+		FormulaStore: store,
+		Matrix: classfile.Matrix{
+			Options: map[string][]string{"zlib": {zlibCommit}},
+		},
+	})
 	if err != nil {
 		t.Fatalf("modules.Load() failed: %v", err)
 	}

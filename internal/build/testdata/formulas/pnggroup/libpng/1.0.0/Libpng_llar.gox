@@ -3,7 +3,11 @@ id "pnggroup/libpng"
 fromVer "1.0.0"
 
 onRequire (proj, deps) => {
-	deps.require "madler/zlib", "v1.2.11"
+	zlibVer := "v1.2.11"
+	if versions := target.options["zlib"]; len(versions) > 0 {
+		zlibVer = versions[0]
+	}
+	deps.require "madler/zlib", zlibVer
 }
 
 onBuild ctx => {
