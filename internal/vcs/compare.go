@@ -185,5 +185,5 @@ func (r *repo) gitLines(args ...string) ([]string, error) {
 }
 
 func (r *repo) runGit(args ...string) ([]byte, error) {
-	return gitCommand(context.Background(), r.historyDir, args...)
+	return historyGit(context.Background(), r.historyDir, args...)
 }
