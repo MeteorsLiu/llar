@@ -60,10 +60,7 @@ var _ vcs.Repo = (*mockLatestRepo)(nil)
 
 func (m *mockLatestRepo) Tags(context.Context) ([]string, error) { return m.tags, m.tagsErr }
 func (m *mockLatestRepo) Latest(context.Context) (string, error) { return m.latest, m.latestErr }
-func (m *mockLatestRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
-	return 0
-}
-func (m *mockLatestRepo) At(ref, localDir string) fs.FS { return os.DirFS(localDir) }
+func (m *mockLatestRepo) At(ref, localDir string) fs.FS          { return os.DirFS(localDir) }
 func (m *mockLatestRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	return nil
 }
@@ -142,7 +139,7 @@ func TestResolveDeps_InvalidModulePath(t *testing.T) {
 	mod := module.Version{Path: "", Version: "1.0.0"}
 	frla := &formula.Formula{ModPath: "", FromVer: "1.0.0"}
 
-	_, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	_, err := resolveDeps(mod, modFS, frla)
 	if err == nil {
 		t.Fatal("expected error for invalid module path")
 	}
@@ -234,7 +231,7 @@ func TestResolveDeps_InvalidDependencyPathFromVersions(t *testing.T) {
 	mod := module.Version{Path: "towner/main", Version: "1.0.0"}
 	frla := loadTestFormula(t, "testdata/load/towner/standalone", "towner/standalone", "1.0.0")
 
-	_, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	_, err := resolveDeps(mod, modFS, frla)
 	if err == nil {
 		t.Fatal("expected error for invalid dependency path")
 	}
@@ -248,7 +245,7 @@ func TestResolveDeps_MissingVersionsFile(t *testing.T) {
 	mod := module.Version{Path: "towner/badcmp", Version: "1.0.0"}
 	frla := loadTestFormula(t, "testdata/load/towner/standalone", "towner/standalone", "1.0.0")
 
-	_, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	_, err := resolveDeps(mod, modFS, frla)
 	if err == nil {
 		t.Fatal("expected error for missing versions.json")
 	}
@@ -318,7 +315,7 @@ func TestResolveDeps_OnRequireMkdirTempError(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "1.0.0"}
 
-	_, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	_, err := resolveDeps(mod, modFS, frla)
 	if err == nil {
 		t.Fatal("expected MkdirTemp error")
 	}

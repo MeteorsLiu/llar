@@ -1402,10 +1402,6 @@ func (e *errorRepo) Latest(ctx context.Context) (string, error) {
 	return "abc123", nil
 }
 
-func (e *errorRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
-	return 0
-}
-
 func (e *errorRepo) At(ref, localDir string) fs.FS {
 	return os.DirFS(".")
 }

@@ -26,10 +26,7 @@ var _ vcs.Repo = (*mockVCSRepo)(nil)
 
 func (m *mockVCSRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
 func (m *mockVCSRepo) Latest(ctx context.Context) (string, error) { return "", nil }
-func (m *mockVCSRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
-	return 0
-}
-func (m *mockVCSRepo) At(ref, localDir string) fs.FS { return os.DirFS(localDir) }
+func (m *mockVCSRepo) At(ref, localDir string) fs.FS              { return os.DirFS(localDir) }
 func (m *mockVCSRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	return nil
 }
@@ -57,7 +54,7 @@ func setupTestStore(t *testing.T, testdataDir string) repo.Store {
 func loadTestFormula(t *testing.T, moduleDir, modPath, version string) *formula.Formula {
 	t.Helper()
 	fsys := os.DirFS(moduleDir)
-	mod := newFormulaModule(fsys, modPath, classfile.Matrix{}, nil)
+	mod := newFormulaModule(fsys, modPath, classfile.Matrix{})
 	f, err := mod.at(version)
 	if err != nil {
 		t.Fatalf("failed to load formula for %s@%s: %v", modPath, version, err)
@@ -94,7 +91,7 @@ func TestResolveDeps_NoOnRequire_DepsFromVersionsJson(t *testing.T) {
 	frla := loadTestFormula(t, "testdata/load/towner/mainmod", "towner/mainmod", "1.0.0")
 	mod := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -111,7 +108,7 @@ func TestResolveDeps_NoOnRequire_NoDeps(t *testing.T) {
 	frla := loadTestFormula(t, "testdata/load/towner/leafmod", "towner/leafmod", "1.0.0")
 	mod := module.Version{Path: "towner/leafmod", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -164,7 +161,7 @@ func TestResolveDeps_VersionNotInDepsTable(t *testing.T) {
 	// Version 9.9.9 doesn't exist in versions.json deps table
 	mod := module.Version{Path: "towner/mainmod", Version: "9.9.9"}
 
-	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -178,7 +175,7 @@ func TestResolveDeps_WithOnRequire_EchoOnly_FallbackToVersionsJson(t *testing.T)
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -196,7 +193,7 @@ func TestResolveDeps_OnRequire_SlashInVersion(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "refs/heads/feature/foo"}
 
-	if _, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{}); err != nil {
+	if _, err := resolveDeps(mod, modFS, frla); err != nil {
 		t.Fatalf("resolveDeps failed for slash-containing version: %v", err)
 	}
 }
@@ -206,7 +203,7 @@ func TestResolveDeps_WithOnRequire_AddsDeps(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withdeps").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withdeps", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -225,7 +222,7 @@ func TestResolveDeps_WithOnRequire_EmptyVersionFallback(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/reqnover").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/reqnover", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -250,7 +247,7 @@ func TestResolveDeps_WithOnRequire_UnknownDepDropped(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/reqdrop").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/reqdrop", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
+	deps, err := resolveDeps(mod, modFS, frla)
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -734,10 +731,7 @@ type failingSyncRepo struct {
 
 func (m *failingSyncRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
 func (m *failingSyncRepo) Latest(ctx context.Context) (string, error) { return "", nil }
-func (m *failingSyncRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
-	return 0
-}
-func (m *failingSyncRepo) At(ref, localDir string) fs.FS { return os.DirFS(localDir) }
+func (m *failingSyncRepo) At(ref, localDir string) fs.FS              { return os.DirFS(localDir) }
 func (m *failingSyncRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	if m.failPaths[path] {
 		return fmt.Errorf("sync failed for %s", path)

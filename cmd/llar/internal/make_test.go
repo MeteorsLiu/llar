@@ -473,11 +473,8 @@ func TestMakeReal_NoVersion(t *testing.T) {
 
 type noopVCSRepo struct{}
 
-func (m *noopVCSRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
-func (m *noopVCSRepo) Latest(ctx context.Context) (string, error) { return "", nil }
-func (m *noopVCSRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
-	return 0
-}
+func (m *noopVCSRepo) Tags(ctx context.Context) ([]string, error)                 { return nil, nil }
+func (m *noopVCSRepo) Latest(ctx context.Context) (string, error)                 { return "", nil }
 func (m *noopVCSRepo) At(ref, localDir string) fs.FS                              { return nil }
 func (m *noopVCSRepo) Sync(ctx context.Context, ref, path, localDir string) error { return nil }
 
