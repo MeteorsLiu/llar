@@ -60,7 +60,10 @@ var _ vcs.Repo = (*mockLatestRepo)(nil)
 
 func (m *mockLatestRepo) Tags(context.Context) ([]string, error) { return m.tags, m.tagsErr }
 func (m *mockLatestRepo) Latest(context.Context) (string, error) { return m.latest, m.latestErr }
-func (m *mockLatestRepo) At(ref, localDir string) fs.FS          { return os.DirFS(localDir) }
+func (m *mockLatestRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
+	return 0
+}
+func (m *mockLatestRepo) At(ref, localDir string) fs.FS { return os.DirFS(localDir) }
 func (m *mockLatestRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	return nil
 }

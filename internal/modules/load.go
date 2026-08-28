@@ -115,7 +115,11 @@ func (c *formulaContext) moduleOf(ctx context.Context, modPath string) (*formula
 	if err != nil {
 		return nil, err
 	}
-	fm := newFormulaModule(fs, modPath, c.matrix)
+	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", modPath))
+	if err != nil {
+		return nil, err
+	}
+	fm := newFormulaModule(fs, modPath, c.matrix, repo)
 	actual, _ := c.moduleCache.LoadOrStore(modPath, fm)
 	return actual.(*formulaModule), nil
 }
@@ -167,7 +171,6 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	}
 
 	context := newFormulaContext(opts.FormulaStore.ModuleFS, opts.Matrix)
-
 	mainMod, err := context.moduleOf(ctx, main.Path)
 	if err != nil {
 		return nil, err
@@ -177,12 +180,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if err != nil {
 			return nil, err
 		}
-		// TODO(MeteorsLiu): Support different code host sites
-		latestRepo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", main.Path))
-		if err != nil {
-			return nil, err
-		}
-		latest, err := latestVersion(ctx, main.Path, latestRepo, cmp)
+		latest, err := latestVersion(ctx, main.Path, mainMod.repo, cmp)
 		if err != nil {
 			return nil, err
 		}

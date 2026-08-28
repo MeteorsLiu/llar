@@ -25,6 +25,10 @@ func init() {
 				Name: "gnu",
 				Path: "github.com/goplus/llar/x/gnu",
 			},
+			{
+				Name: "vcs",
+				Path: "github.com/goplus/llar/x/vcs",
+			},
 		},
 	})
 	xgobuild.RegisterProject(&modfile.Project{

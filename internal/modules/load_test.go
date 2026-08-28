@@ -26,7 +26,10 @@ var _ vcs.Repo = (*mockVCSRepo)(nil)
 
 func (m *mockVCSRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
 func (m *mockVCSRepo) Latest(ctx context.Context) (string, error) { return "", nil }
-func (m *mockVCSRepo) At(ref, localDir string) fs.FS              { return os.DirFS(localDir) }
+func (m *mockVCSRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
+	return 0
+}
+func (m *mockVCSRepo) At(ref, localDir string) fs.FS { return os.DirFS(localDir) }
 func (m *mockVCSRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	return nil
 }
@@ -54,7 +57,7 @@ func setupTestStore(t *testing.T, testdataDir string) repo.Store {
 func loadTestFormula(t *testing.T, moduleDir, modPath, version string) *formula.Formula {
 	t.Helper()
 	fsys := os.DirFS(moduleDir)
-	mod := newFormulaModule(fsys, modPath, classfile.Matrix{})
+	mod := newFormulaModule(fsys, modPath, classfile.Matrix{}, nil)
 	f, err := mod.at(version)
 	if err != nil {
 		t.Fatalf("failed to load formula for %s@%s: %v", modPath, version, err)
@@ -731,7 +734,10 @@ type failingSyncRepo struct {
 
 func (m *failingSyncRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
 func (m *failingSyncRepo) Latest(ctx context.Context) (string, error) { return "", nil }
-func (m *failingSyncRepo) At(ref, localDir string) fs.FS              { return os.DirFS(localDir) }
+func (m *failingSyncRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
+	return 0
+}
+func (m *failingSyncRepo) At(ref, localDir string) fs.FS { return os.DirFS(localDir) }
 func (m *failingSyncRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	if m.failPaths[path] {
 		return fmt.Errorf("sync failed for %s", path)

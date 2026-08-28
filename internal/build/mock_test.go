@@ -22,6 +22,10 @@ func (m *mockRepo) Latest(ctx context.Context) (string, error) {
 	return "abc123", nil
 }
 
+func (m *mockRepo) CompareFunc(a, b string, compareTag func(a, b string) int) int {
+	return 0
+}
+
 func (m *mockRepo) At(ref, localDir string) fs.FS {
 	return os.DirFS(m.testdataDir)
 }

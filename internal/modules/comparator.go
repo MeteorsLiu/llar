@@ -12,6 +12,7 @@ import (
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
 	_ "github.com/goplus/llar/internal/ixgo"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
 
@@ -26,9 +27,19 @@ type comparatorProgram struct {
 //   - a negative value if v1 < v2
 //   - zero if v1 == v2
 //   - a positive value if v1 > v2
-func loadComparatorFS(fs fs.ReadFileFS, path string) (comparator func(v1, v2 module.Version) int, err error) {
+func loadComparatorFS(
+	fs fs.ReadFileFS,
+	path string,
+	repo vcs.Repo,
+) (comparator func(v1, v2 module.Version) int, err error) {
 	// Loading a comparator must not reset method slots owned by cached formulas.
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
+	ctx.RegisterExternal("github.com/goplus/llar/x/vcs.CompareFunc", func(
+		a, b module.Version,
+		compareTag func(a, b string) int,
+	) int {
+		return repo.CompareFunc(a.Version, b.Version, compareTag)
+	})
 
 	content, err := fs.ReadFile(path)
 	if err != nil {

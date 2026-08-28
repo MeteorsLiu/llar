@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -35,8 +34,7 @@ func newGitHubClient() *githubClient {
 func (g *githubClient) Tags(ctx context.Context, owner, repo string) ([]string, error) {
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--refs", repoURL)
-	output, err := cmd.Output()
+	output, err := gitCommand(ctx, "", "ls-remote", "--tags", "--refs", repoURL)
 	if err != nil {
 		return nil, fmt.Errorf("git ls-remote: %w", err)
 	}
@@ -64,8 +62,7 @@ func (g *githubClient) Tags(ctx context.Context, owner, repo string) ([]string, 
 func (g *githubClient) Latest(ctx context.Context, owner, repo string) (string, error) {
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", repoURL, "HEAD")
-	output, err := cmd.Output()
+	output, err := gitCommand(ctx, "", "ls-remote", repoURL, "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("git ls-remote: %w", err)
 	}
@@ -177,16 +174,8 @@ func (g *githubClient) syncDirSparse(ctx context.Context, owner, repo, ref, path
 
 	// Helper to run git commands in destDir
 	runGit := func(args ...string) error {
-		cmd := exec.CommandContext(ctx, "git", args...)
-		cmd.Dir = destDir
-		cmd.Env = append(os.Environ(),
-			"GIT_TERMINAL_PROMPT=0", // Disable interactive prompts
-		)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("git %s: %w\n%s", args[0], err, string(output))
-		}
-		return nil
+		_, err := gitCommand(ctx, destDir, args...)
+		return err
 	}
 
 	// Check if this directory already has a git repo from a previous sync.
@@ -235,14 +224,8 @@ func (g *githubClient) syncDirShallowClone(ctx context.Context, owner, repo, ref
 	}
 
 	runGit := func(args ...string) error {
-		cmd := exec.CommandContext(ctx, "git", args...)
-		cmd.Dir = destDir
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("git %s: %w\n%s", args[0], err, string(output))
-		}
-		return nil
+		_, err := gitCommand(ctx, destDir, args...)
+		return err
 	}
 
 	// Initialize git repo (ignore error if already initialized)
@@ -258,6 +241,30 @@ func (g *githubClient) syncDirShallowClone(ctx context.Context, owner, repo, ref
 
 	// Checkout the fetched content
 	return runGit("checkout", "FETCH_HEAD")
+}
+
+func (g *githubClient) syncHistory(ctx context.Context, owner, repo, destDir string) error {
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
+	}
+	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+	if _, err := gitCommand(ctx, destDir, "init", "--bare", "."); err != nil {
+		return err
+	}
+	if _, err := gitCommand(ctx, destDir, "remote", "add", "origin", repoURL); err != nil {
+		return err
+	}
+	_, err := gitCommand(
+		ctx,
+		destDir,
+		"fetch",
+		"--force",
+		"--filter=blob:none",
+		"origin",
+		"+refs/heads/*:refs/remotes/origin/*",
+		"+refs/tags/*:refs/tags/*",
+	)
+	return err
 }
 
 // fileInfo implements fs.FileInfo.

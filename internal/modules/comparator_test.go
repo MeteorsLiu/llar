@@ -133,7 +133,7 @@ func TestValueOf_FunctionField(t *testing.T) {
 
 func TestLoadComparator_InvalidPath(t *testing.T) {
 	// Test with non-existent file
-	_, err := loadComparatorFS(os.DirFS("/nonexistent").(fs.ReadFileFS), "/path/cmp.gox")
+	_, err := loadComparatorFS(os.DirFS("/nonexistent").(fs.ReadFileFS), "/path/cmp.gox", nil)
 	if err == nil {
 		t.Error("loadComparator should return error for non-existent file")
 	}
@@ -141,7 +141,7 @@ func TestLoadComparator_InvalidPath(t *testing.T) {
 
 func TestLoadComparator_Fake(t *testing.T) {
 	// Test with non-existent file
-	cmp, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), "fakecomp/fakecomp_cmp.gox")
+	cmp, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), "fakecomp/fakecomp_cmp.gox", nil)
 	if err != nil {
 		t.Error("loadComparator should return error for non-existent file")
 	}
@@ -159,7 +159,7 @@ func TestLoadComparator_OutsideModule(t *testing.T) {
 	// Formula repositories do not contain go.mod. For example, llarhub stores
 	// CJSON_cmp.gox beside versions.json, so loading it must not invoke go list.
 	t.Chdir(t.TempDir())
-	comp, err := loadComparatorFS(os.DirFS(formulaDir).(fs.ReadFileFS), "CJSON_cmp.gox")
+	comp, err := loadComparatorFS(os.DirFS(formulaDir).(fs.ReadFileFS), "CJSON_cmp.gox", nil)
 	if err != nil {
 		t.Fatalf("loadComparatorFS outside a module: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestLoadComparator_InvalidFileExtension(t *testing.T) {
 	invalidFile := tempDir + "/test.txt"
 
 	// loadComparator expects .gox files, so this should fail
-	_, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), invalidFile)
+	_, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), invalidFile, nil)
 	if err == nil {
 		t.Error("loadComparator should return error for invalid file")
 	}
@@ -184,7 +184,7 @@ func TestLoadComparator_EmptyDirectory(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Try to load from empty directory
-	_, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), tempDir)
+	_, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), tempDir, nil)
 	if err == nil {
 		t.Error("loadComparator should return error for directory path")
 	}
@@ -194,7 +194,7 @@ func TestLoadComparator_WithRealTestData(t *testing.T) {
 	// Use the real testdata comparator file
 	cmpPath := "DaveGamble/cJSON/CJSON_cmp.gox"
 
-	comp, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), cmpPath)
+	comp, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), cmpPath, nil)
 	if err != nil {
 		t.Fatalf("loadComparatorFS(), %q) error = %v", cmpPath, err)
 	}

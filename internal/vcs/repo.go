@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"sync"
 )
 
 // Repo represents a code hosting repository.
@@ -18,6 +19,9 @@ type Repo interface {
 	Tags(ctx context.Context) ([]string, error)
 	// Latest returns the latest commit hash on the default branch.
 	Latest(ctx context.Context) (string, error)
+	// CompareFunc compares two tags or commits using repository history and
+	// compareTag to order tags.
+	CompareFunc(a, b string, compareTag func(a, b string) int) int
 	// At returns a filesystem view of the repository at the specified ref.
 	// The returned fs.FS also implements fs.ReadFileFS and fs.ReadDirFS.
 	At(ref, localDir string) fs.FS
@@ -31,6 +35,11 @@ type repo struct {
 	host   string
 	owner  string
 	name   string
+
+	historyMu          sync.Mutex
+	historyDir         string
+	historyInitialized bool
+	revisions          map[string]revision
 }
 
 // NewRepo creates a new Repo for the given repository path.

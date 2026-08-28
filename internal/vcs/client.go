@@ -26,6 +26,9 @@ type client interface {
 
 	// SyncDir downloads a directory to the destination directory.
 	SyncDir(ctx context.Context, owner, repo, ref, path, destDir string) error
+
+	// syncHistory downloads the refs and ancestry needed for version comparison.
+	syncHistory(ctx context.Context, owner, repo, destDir string) error
 }
 
 // newClient creates a client for the specified host.

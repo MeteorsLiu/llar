@@ -9,6 +9,7 @@ package ixgo
 //go:generate qexp -outdir pkg github.com/goplus/llar/mod/versions
 //go:generate qexp -outdir pkg golang.org/x/mod/semver
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/gnu
+//go:generate qexp -outdir pkg github.com/goplus/llar/x/vcs
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/autotools
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/cmake
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/pkgconfig
@@ -27,6 +28,7 @@ import (
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/cmake"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/gnu"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/pkgconfig"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/x/vcs"
 
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/qiniu/x/gsh"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/golang.org/x/mod/semver"
