@@ -94,7 +94,7 @@ func TestResolveDeps_NoOnRequire_DepsFromVersionsJson(t *testing.T) {
 	frla := loadTestFormula(t, "testdata/load/towner/mainmod", "towner/mainmod", "1.0.0")
 	mod := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla)
+	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestResolveDeps_NoOnRequire_NoDeps(t *testing.T) {
 	frla := loadTestFormula(t, "testdata/load/towner/leafmod", "towner/leafmod", "1.0.0")
 	mod := module.Version{Path: "towner/leafmod", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla)
+	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestResolveDeps_VersionNotInDepsTable(t *testing.T) {
 	// Version 9.9.9 doesn't exist in versions.json deps table
 	mod := module.Version{Path: "towner/mainmod", Version: "9.9.9"}
 
-	deps, err := resolveDeps(mod, modFS, frla)
+	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestResolveDeps_WithOnRequire_EchoOnly_FallbackToVersionsJson(t *testing.T)
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla)
+	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestResolveDeps_OnRequire_SlashInVersion(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "refs/heads/feature/foo"}
 
-	if _, err := resolveDeps(mod, modFS, frla); err != nil {
+	if _, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{}); err != nil {
 		t.Fatalf("resolveDeps failed for slash-containing version: %v", err)
 	}
 }
@@ -206,7 +206,7 @@ func TestResolveDeps_WithOnRequire_AddsDeps(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withdeps").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withdeps", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla)
+	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestResolveDeps_WithOnRequire_EmptyVersionFallback(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/reqnover").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/reqnover", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla)
+	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestResolveDeps_WithOnRequire_UnknownDepDropped(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/reqdrop").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/reqdrop", Version: "1.0.0"}
 
-	deps, err := resolveDeps(mod, modFS, frla)
+	deps, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err != nil {
 		t.Fatalf("resolveDeps failed: %v", err)
 	}

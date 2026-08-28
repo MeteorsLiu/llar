@@ -134,7 +134,7 @@ func (c *formulaContext) loadDeps(ctx context.Context, mod module.Version) (deps
 	if err != nil {
 		return nil, err
 	}
-	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f)
+	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f, thisMod.repo)
 }
 
 // convertToModules converts a list of module.Version into loaded Module structs.
@@ -190,7 +190,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	if err != nil {
 		return nil, err
 	}
-	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula)
+	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula, mainMod.repo)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +285,7 @@ func runFormulaHook(fn func()) (err error) {
 // resolveDeps resolves the dependencies for a formula.
 // It first tries to get dependencies from the OnRequire callback,
 // then falls back to parsing versions.json if no dependencies are found.
-func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula) ([]module.Version, error) {
+func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula, sourceRepo vcs.Repo) ([]module.Version, error) {
 	if err := validateModulePath(mod.Path); err != nil {
 		return nil, err
 	}
@@ -304,11 +304,6 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 
 	var deps classfile.ModuleDeps
 
-	// TODO(MeteorsLiu): Support different code host sites.
-	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mod.Path))
-	if err != nil {
-		return nil, err
-	}
 	// onRequire is optional
 	if frla.OnRequire != nil {
 		// TODO(MeteorsLiu): Design source cache dir
@@ -320,7 +315,7 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 		}
 		defer os.RemoveAll(tmpSourceDir)
 
-		repoFS := repo.At(mod.Version, tmpSourceDir)
+		repoFS := sourceRepo.At(mod.Version, tmpSourceDir)
 		proj := &classfile.Project{
 			SourceFS: repoFS.(fs.ReadFileFS),
 		}
