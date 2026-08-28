@@ -454,7 +454,7 @@ func TestE2E_RealLibpngCommitDependencyBuild(t *testing.T) {
 	mods, err := modules.Load(ctx, main, modules.Options{
 		FormulaStore: store,
 		Matrix: classfile.Matrix{
-			Options: map[string][]string{"zlib": {zlibCommit}},
+			Options: map[string][]string{"zlib": {"commit"}},
 		},
 	})
 	if err != nil {

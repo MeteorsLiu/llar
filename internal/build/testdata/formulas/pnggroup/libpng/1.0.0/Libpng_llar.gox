@@ -1,13 +1,15 @@
+import "slices"
+
 id "pnggroup/libpng"
 
 fromVer "1.0.0"
 
 onRequire (proj, deps) => {
-	zlibVer := "v1.2.11"
-	if versions := target.options["zlib"]; len(versions) > 0 {
-		zlibVer = versions[0]
+	if slices.contains(target.options["zlib"], "commit") {
+		deps.require "madler/zlib", "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
+	} else {
+		deps.require "madler/zlib", "v1.2.11"
 	}
-	deps.require "madler/zlib", zlibVer
 }
 
 onBuild ctx => {
