@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
@@ -418,6 +419,103 @@ func TestE2E_RealZlibCommitBuild(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(installDir, "lib", "libz.a")); err != nil {
 		t.Fatalf("libz.a not found at %s: %v", installDir, err)
+	}
+}
+
+// TestE2E_RealLibpngCommitDependencyBuild verifies a real dependency commit
+// through the full pipeline: MVS resolves libpng's zlib commit, zlib is built
+// first from that commit, and libpng then links against the installed zlib.
+func TestE2E_RealLibpngCommitDependencyBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real commit dependency build test in short mode")
+	}
+	if _, err := exec.LookPath("cmake"); err != nil {
+		t.Skip("cmake not found, skipping real commit dependency build test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found, skipping real commit dependency build test")
+	}
+
+	const zlibCommit = "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
+	formulaDir := t.TempDir()
+	if err := os.CopyFS(formulaDir, os.DirFS(testFormulaDir)); err != nil {
+		t.Fatalf("copy formula fixtures: %v", err)
+	}
+	libpngFormula := filepath.Join(formulaDir, "pnggroup", "libpng", "1.0.0", "Libpng_llar.gox")
+	content, err := os.ReadFile(libpngFormula)
+	if err != nil {
+		t.Fatalf("read libpng formula: %v", err)
+	}
+	contentText := strings.Replace(string(content), `deps.require "madler/zlib", "v1.2.11"`, `deps.require "madler/zlib", "`+zlibCommit+`"`, 1)
+	if contentText == string(content) {
+		t.Fatal("libpng formula did not contain the expected zlib tag dependency")
+	}
+	if err := os.WriteFile(libpngFormula, []byte(contentText), 0644); err != nil {
+		t.Fatalf("write libpng formula: %v", err)
+	}
+	store := repo.New(formulaDir, newMockRepo(formulaDir))
+
+	matrix := runtime.GOARCH + "-" + runtime.GOOS
+	workspaceDir := t.TempDir()
+	b := &Builder{
+		store:        store,
+		matrix:       matrix,
+		workspaceDir: workspaceDir,
+		cache:        &localCache{workspaceDir: workspaceDir},
+		newRepo:      vcs.NewRepo,
+	}
+
+	main := module.Version{Path: "pnggroup/libpng", Version: "v1.6.47"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+	if len(mods) != 2 {
+		t.Fatalf("loaded modules = %d, want 2", len(mods))
+	}
+	var zlibMod *modules.Module
+	for _, mod := range mods {
+		if mod.Path == "madler/zlib" {
+			zlibMod = mod
+			break
+		}
+	}
+	if zlibMod == nil {
+		t.Fatal("missing madler/zlib dependency")
+	}
+	if zlibMod.Version != zlibCommit {
+		t.Fatalf("zlib dependency version = %q, want %q", zlibMod.Version, zlibCommit)
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+	zlibResult, ok := findResult(results, b, mods, "madler/zlib")
+	if !ok {
+		t.Fatal("missing zlib build result")
+	}
+	if zlibResult.Metadata != "-lz" {
+		t.Fatalf("zlib metadata = %q, want %q", zlibResult.Metadata, "-lz")
+	}
+	pngResult, ok := findResult(results, b, mods, "pnggroup/libpng")
+	if !ok {
+		t.Fatal("missing libpng build result")
+	}
+	if pngResult.Metadata != "-lpng" {
+		t.Fatalf("libpng metadata = %q, want %q", pngResult.Metadata, "-lpng")
+	}
+
+	installDir, err := b.installDir("pnggroup/libpng", "v1.6.47")
+	if err != nil {
+		t.Fatalf("installDir() failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(installDir, "include", "libpng16", "png.h")); err != nil {
+		t.Fatalf("png.h not found at %s: %v", installDir, err)
 	}
 }
 
