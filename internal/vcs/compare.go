@@ -103,7 +103,7 @@ func (r *repo) resolveRevision(ref string) revision {
 	if err != nil {
 		panic(fmt.Errorf("resolve VCS version %s/%s/%s@%s: %w", r.host, r.owner, r.name, ref, err))
 	}
-	timestamp, err := r.runGit("show", "-s", "--format=%ct", commitID)
+	timestamp, err := historyGit(context.Background(), r.historyDir, "show", "-s", "--format=%ct", commitID)
 	if err != nil {
 		panic(fmt.Errorf("resolve VCS version %s/%s/%s@%s: %w", r.host, r.owner, r.name, ref, err))
 	}
@@ -160,12 +160,12 @@ func (r *repo) prepareHistory() (err error) {
 
 func (r *repo) resolveCommit(ref string) (commitID, exactTag string, err error) {
 	tagRef := "refs/tags/" + ref
-	if _, checkErr := r.runGit("check-ref-format", tagRef); checkErr == nil {
-		if output, tagErr := r.runGit("rev-parse", "--verify", "--end-of-options", tagRef+"^{commit}"); tagErr == nil {
+	if _, checkErr := historyGit(context.Background(), r.historyDir, "check-ref-format", tagRef); checkErr == nil {
+		if output, tagErr := historyGit(context.Background(), r.historyDir, "rev-parse", "--verify", "--end-of-options", tagRef+"^{commit}"); tagErr == nil {
 			return strings.TrimSpace(string(output)), ref, nil
 		}
 	}
-	output, err := r.runGit("rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	output, err := historyGit(context.Background(), r.historyDir, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
 	if err != nil {
 		return "", "", err
 	}
@@ -173,7 +173,7 @@ func (r *repo) resolveCommit(ref string) (commitID, exactTag string, err error) 
 }
 
 func (r *repo) gitLines(args ...string) ([]string, error) {
-	output, err := r.runGit(args...)
+	output, err := historyGit(context.Background(), r.historyDir, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +182,4 @@ func (r *repo) gitLines(args ...string) ([]string, error) {
 		return nil, nil
 	}
 	return strings.Split(text, "\n"), nil
-}
-
-func (r *repo) runGit(args ...string) ([]byte, error) {
-	return historyGit(context.Background(), r.historyDir, args...)
 }
