@@ -184,10 +184,10 @@ func TestLoadRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tags[0].Commit; tags[0].Name != "v1.0.0" || got != headOID {
+	if got := tags[0].Hash; tags[0].Name != "v1.0.0" || got != headOID {
 		t.Fatalf("v1.0.0 commit = %q, want %q", got, headOID)
 	}
-	if got := tags[1].Commit; tags[1].Name != "v2.0.0" || got != tagCommitOID {
+	if got := tags[1].Hash; tags[1].Name != "v2.0.0" || got != tagCommitOID {
 		t.Fatalf("v2.0.0 commit = %q, want peeled %q", got, tagCommitOID)
 	}
 	if got, want := strings.Join(githubRefsOf(repo).tips, ","), strings.Join([]string{headOID, tagCommitOID}, ","); got != want {
@@ -232,6 +232,36 @@ func TestCompareHexadecimalTag(t *testing.T) {
 	}()
 	if got := repo.Refs().CompareFunc("deadbeef", commitID, strings.Compare); got != 0 {
 		t.Fatalf("hexadecimal tag and its commit comparison = %d, want 0", got)
+	}
+}
+
+func TestCompareCommitPrefersTagsAtCommit(t *testing.T) {
+	dir := t.TempDir()
+	mustRunGit(t, dir, nil, "init")
+	mustRunGit(t, dir, nil, "config", "user.name", "LLAR Test")
+	mustRunGit(t, dir, nil, "config", "user.email", "llar@example.com")
+
+	commitFile(t, dir, "first\n", "2026-01-02T03:04:05Z")
+	mustRunGit(t, dir, nil, "tag", "v2.0.0")
+	commitID := commitFile(t, dir, "second\n", "2026-02-03T04:05:06Z")
+	mustRunGit(t, dir, nil, "tag", "v1.0.0")
+	mustRunGit(t, dir, nil, "tag", "v1.1.0")
+
+	useLocalGitRemote(t, dir)
+	logFile := installTestGit(t, "", nil, false)
+	repo := newTestRepo()
+	defer func() {
+		_ = os.RemoveAll(githubRefsOf(repo).dir)
+		runtime.KeepAlive(repo)
+	}()
+	if got := repo.Refs().CompareFunc(commitID, "v1.1.0", semver.Compare); got != 0 {
+		t.Fatalf("commit and highest tag at commit comparison = %d, want 0", got)
+	}
+	if got := repo.Refs().CompareFunc(commitID, "v2.0.0", semver.Compare); got >= 0 {
+		t.Fatalf("commit and higher ancestor tag comparison = %d, want negative", got)
+	}
+	if got := countGitCalls(t, logFile, "rev-list"); got != 0 {
+		t.Fatalf("rev-list calls = %d, want 0", got)
 	}
 }
 

@@ -42,7 +42,7 @@ func (r *repoRefs) CompareFunc(a, b string, compareTag func(a, b string) int) in
 	}
 	tagCommits := make(map[string]string, len(tags))
 	for _, tag := range tags {
-		tagCommits[tag.Name] = tag.Commit
+		tagCommits[tag.Name] = tag.Hash
 	}
 	_, leftIsTag := tagCommits[a]
 	_, rightIsTag := tagCommits[b]
@@ -68,6 +68,20 @@ func (r *repoRefs) revision(ref string, tags map[string]string) (revision, error
 	if err != nil {
 		return revision{}, err
 	}
+	var tagsAtCommit []string
+	for tag, commit := range tags {
+		if commit == info.commit {
+			tagsAtCommit = append(tagsAtCommit, tag)
+		}
+	}
+	if len(tagsAtCommit) != 0 {
+		return revision{
+			commitID:      info.commit,
+			commitTime:    info.time,
+			reachableTags: tagsAtCommit,
+			tagsAtCommit:  tagsAtCommit,
+		}, nil
+	}
 	ancestors, err := r.client.ancestors(r.owner, r.repo, info.commit)
 	if err != nil {
 		return revision{}, err
@@ -77,12 +91,8 @@ func (r *repoRefs) revision(ref string, tags map[string]string) (revision, error
 		ancestorSet[ancestor] = struct{}{}
 	}
 	var reachableTags []string
-	var tagsAtCommit []string
 	for tag, commit := range tags {
-		if commit == info.commit {
-			reachableTags = append(reachableTags, tag)
-			tagsAtCommit = append(tagsAtCommit, tag)
-		} else if _, ok := ancestorSet[commit]; ok {
+		if _, ok := ancestorSet[commit]; ok {
 			reachableTags = append(reachableTags, tag)
 		}
 	}
@@ -90,7 +100,6 @@ func (r *repoRefs) revision(ref string, tags map[string]string) (revision, error
 		commitID:      info.commit,
 		commitTime:    info.time,
 		reachableTags: reachableTags,
-		tagsAtCommit:  tagsAtCommit,
 	}, nil
 }
 

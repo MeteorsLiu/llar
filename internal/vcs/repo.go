@@ -29,8 +29,8 @@ type Repo interface {
 
 // Tag identifies the commit referenced by a repository tag.
 type Tag struct {
-	Name   string
-	Commit string
+	Name string
+	Hash string
 }
 
 // repo is the default implementation of Repo.

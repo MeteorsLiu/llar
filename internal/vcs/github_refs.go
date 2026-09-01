@@ -38,7 +38,7 @@ func (r *githubRefs) list(ctx context.Context, owner, repo string) ([]Tag, error
 	names := slices.Sorted(maps.Keys(r.tags))
 	tags := make([]Tag, len(names))
 	for i, name := range names {
-		tags[i] = Tag{Name: name, Commit: r.tags[name]}
+		tags[i] = Tag{Name: name, Hash: r.tags[name]}
 	}
 	return tags, nil
 }
