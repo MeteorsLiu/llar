@@ -20,7 +20,7 @@ import (
 
 func TestNewFormulaModule(t *testing.T) {
 	fsys := os.DirFS("testdata/DaveGamble/cJSON")
-	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{}, &mockVCSRepo{})
 
 	if mod == nil {
 		t.Fatal("newFormulaModule returned nil")
@@ -38,7 +38,7 @@ func TestNewFormulaModule(t *testing.T) {
 
 func TestFormulaModule_Comparator(t *testing.T) {
 	fsys := os.DirFS("testdata/DaveGamble/cJSON")
-	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{}, &mockVCSRepo{})
 
 	// First call should load comparator
 	cmp, err := mod.comparator()
@@ -76,7 +76,7 @@ func TestFormulaModule_Comparator(t *testing.T) {
 func TestFormulaModule_ComparatorDefaultFallback(t *testing.T) {
 	fsys := os.DirFS("testdata/madler/zlib")
 	// madler/zlib has no comparator file, should use default
-	mod := newFormulaModule(fsys, "madler/zlib", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "madler/zlib", classfile.Matrix{}, &mockVCSRepo{})
 
 	cmp, err := mod.comparator()
 	if err != nil {
@@ -96,7 +96,7 @@ func TestFormulaModule_ComparatorDefaultFallback(t *testing.T) {
 
 func TestFormulaModule_At(t *testing.T) {
 	fsys := os.DirFS("testdata/DaveGamble/cJSON")
-	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{}, &mockVCSRepo{})
 
 	// Test getting formula for version v1.7.18 (should match fromVer v1.5.0)
 	f, err := mod.at("v1.7.18")
@@ -124,7 +124,7 @@ func TestFormulaModule_At(t *testing.T) {
 }
 
 func TestFormulaModule_AtReturnsIsolatedClasses(t *testing.T) {
-	mod := newFormulaModule(os.DirFS("testdata/load/towner/targetreq"), "towner/targetreq", classfile.Matrix{})
+	mod := newFormulaModule(os.DirFS("testdata/load/towner/targetreq"), "towner/targetreq", classfile.Matrix{}, &mockVCSRepo{})
 
 	const workers = 32
 	errs := make(chan error, workers)
@@ -177,7 +177,7 @@ func TestFormulaModule_AtReturnsIsolatedClasses(t *testing.T) {
 
 func TestFormulaModule_AtVersionMatching(t *testing.T) {
 	fsys := os.DirFS("testdata/DaveGamble/cJSON")
-	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{}, &mockVCSRepo{})
 
 	tests := []struct {
 		version     string
@@ -206,7 +206,7 @@ func TestFormulaModule_AtVersionMatching(t *testing.T) {
 
 func TestFormulaModule_AtNoFormula(t *testing.T) {
 	fsys := os.DirFS("testdata/DaveGamble/cJSON")
-	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{}, &mockVCSRepo{})
 
 	// Version lower than all fromVer should fail
 	_, err := mod.at("v0.5.0")
@@ -217,7 +217,7 @@ func TestFormulaModule_AtNoFormula(t *testing.T) {
 
 func TestFormulaModule_AtNonexistentModule(t *testing.T) {
 	fsys := os.DirFS("testdata/nonexistent")
-	mod := newFormulaModule(fsys, "nonexistent/module", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "nonexistent/module", classfile.Matrix{}, &mockVCSRepo{})
 
 	_, err := mod.at("1.0.0")
 	if err == nil {
@@ -227,7 +227,7 @@ func TestFormulaModule_AtNonexistentModule(t *testing.T) {
 
 func TestFormulaModule_FindMaxFromVer(t *testing.T) {
 	fsys := os.DirFS("testdata/DaveGamble/cJSON")
-	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{}, &mockVCSRepo{})
 
 	cmp, _ := mod.comparator()
 	target := module.Version{Path: "DaveGamble/cJSON", Version: "v1.7.18"}
@@ -448,7 +448,7 @@ func TestParseCallArg_NonStringArg(t *testing.T) {
 
 func TestIntegration_FormulaModuleToFormula(t *testing.T) {
 	fsys := os.DirFS("testdata/DaveGamble/cJSON")
-	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON", classfile.Matrix{}, &mockVCSRepo{})
 
 	// Get formula
 	f, err := mod.at("v1.7.18")
@@ -477,7 +477,7 @@ func TestIntegration_MultipleModules(t *testing.T) {
 
 	for _, m := range modules {
 		fsys := os.DirFS(m.dir)
-		mod := newFormulaModule(fsys, m.path, classfile.Matrix{})
+		mod := newFormulaModule(fsys, m.path, classfile.Matrix{}, &mockVCSRepo{})
 
 		f, err := mod.at(m.version)
 		if err != nil {
@@ -513,7 +513,7 @@ func TestIntegration_RealRepo(t *testing.T) {
 		t.Fatalf("ModuleFS() failed: %v", err)
 	}
 
-	mod := newFormulaModule(fsys, "madler/zlib", classfile.Matrix{})
+	mod := newFormulaModule(fsys, "madler/zlib", classfile.Matrix{}, &mockVCSRepo{})
 
 	// Test comparator (should fall back to GNU version comparison)
 	cmp, err := mod.comparator()

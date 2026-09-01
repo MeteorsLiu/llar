@@ -20,6 +20,7 @@ import (
 // githubClient implements client interface using raw GitHub URLs (no API).
 type githubClient struct {
 	httpClient *http.Client
+	refs       githubRefs
 }
 
 // newGitHubClient creates a new GitHub client.
@@ -32,32 +33,8 @@ func newGitHubClient() *githubClient {
 }
 
 // Tags returns all tags from the repository using git ls-remote.
-func (g *githubClient) Tags(ctx context.Context, owner, repo string) ([]string, error) {
-	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
-
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--tags", "--refs", repoURL)
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git ls-remote: %w", err)
-	}
-
-	var tags []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		// Format: <sha>\trefs/tags/<tagname>
-		parts := strings.Split(line, "\t")
-		if len(parts) != 2 {
-			continue
-		}
-		ref := parts[1]
-		tag := strings.TrimPrefix(ref, "refs/tags/")
-		tags = append(tags, tag)
-	}
-
-	return tags, nil
+func (g *githubClient) Tags(ctx context.Context, owner, repo string) ([]Tag, error) {
+	return g.refs.list(ctx, owner, repo)
 }
 
 // Latest returns the latest commit hash on the default branch using git ls-remote.

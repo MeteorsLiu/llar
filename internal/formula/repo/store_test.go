@@ -24,13 +24,21 @@ type mockRepo struct {
 	syncFn func(ctx context.Context, ref, path, localDir string) error
 }
 
-func (m *mockRepo) Tags(ctx context.Context) ([]string, error) {
+type mockRefs struct{}
+
+func (mockRefs) CompareFunc(a, b string, compareTag func(a, b string) int) int {
+	return compareTag(a, b)
+}
+
+func (m *mockRepo) Tags(ctx context.Context) ([]vcs.Tag, error) {
 	return nil, nil
 }
 
 func (m *mockRepo) Latest(ctx context.Context) (string, error) {
 	return "", nil
 }
+
+func (m *mockRepo) Refs() vcs.Refs { return mockRefs{} }
 
 func (m *mockRepo) At(ref, localDir string) fs.FS {
 	return nil

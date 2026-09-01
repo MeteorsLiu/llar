@@ -15,14 +15,22 @@ import (
 // It provides version queries and can create filesystem views for specific refs.
 type Repo interface {
 	// Tags returns all tags from the repository.
-	Tags(ctx context.Context) ([]string, error)
+	Tags(ctx context.Context) ([]Tag, error)
 	// Latest returns the latest commit hash on the default branch.
 	Latest(ctx context.Context) (string, error)
+	// Refs returns the repository references used for version comparison.
+	Refs() Refs
 	// At returns a filesystem view of the repository at the specified ref.
 	// The returned fs.FS also implements fs.ReadFileFS and fs.ReadDirFS.
 	At(ref, localDir string) fs.FS
 	// Sync downloads the specified path to localDir.
 	Sync(ctx context.Context, ref, path, localDir string) error
+}
+
+// Tag identifies the commit referenced by a repository tag.
+type Tag struct {
+	Name   string
+	Commit string
 }
 
 // repo is the default implementation of Repo.
@@ -31,6 +39,14 @@ type repo struct {
 	host   string
 	owner  string
 	name   string
+	refs   repoRefs
+}
+
+// Refs provides version comparison over repository references.
+type Refs interface {
+	// CompareFunc compares two tags or commits, falling back to compareTag when
+	// the references cannot be prepared or resolved.
+	CompareFunc(a, b string, compareTag func(a, b string) int) int
 }
 
 // NewRepo creates a new Repo for the given repository path.
@@ -46,22 +62,33 @@ func NewRepo(repoPath string) (Repo, error) {
 		return nil, err
 	}
 
-	return &repo{
+	r := &repo{
 		client: c,
 		host:   host,
 		owner:  owner,
 		name:   repoName,
-	}, nil
+		refs: repoRefs{
+			client: c,
+			owner:  owner,
+			repo:   repoName,
+		},
+	}
+	return r, nil
 }
 
 // Tags returns all tags from the repository.
-func (r *repo) Tags(ctx context.Context) ([]string, error) {
+func (r *repo) Tags(ctx context.Context) ([]Tag, error) {
 	return r.client.Tags(ctx, r.owner, r.name)
 }
 
 // Latest returns the latest commit hash on the default branch.
 func (r *repo) Latest(ctx context.Context) (string, error) {
 	return r.client.Latest(ctx, r.owner, r.name)
+}
+
+// Refs returns the repository references used for version comparison.
+func (r *repo) Refs() Refs {
+	return &r.refs
 }
 
 // At returns a filesystem view of the repository at the specified ref.

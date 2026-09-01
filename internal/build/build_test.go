@@ -1394,13 +1394,15 @@ type errorRepo struct {
 	syncErr error
 }
 
-func (e *errorRepo) Tags(ctx context.Context) ([]string, error) {
-	return []string{"v1.0.0"}, nil
+func (e *errorRepo) Tags(ctx context.Context) ([]vcs.Tag, error) {
+	return []vcs.Tag{{Name: "v1.0.0"}}, nil
 }
 
 func (e *errorRepo) Latest(ctx context.Context) (string, error) {
 	return "abc123", nil
 }
+
+func (e *errorRepo) Refs() vcs.Refs { return mockRefs{} }
 
 func (e *errorRepo) At(ref, localDir string) fs.FS {
 	return os.DirFS(".")

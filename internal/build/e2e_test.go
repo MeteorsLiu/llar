@@ -360,68 +360,6 @@ func TestE2E_RealZlibBuild(t *testing.T) {
 	}
 }
 
-// TestE2E_RealZlibCommitBuild verifies the full build pipeline when the
-// selected source revision is a commit after a real release tag. The formula
-// comparator must resolve that history before the build can select its formula.
-func TestE2E_RealZlibCommitBuild(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real commit build test in short mode")
-	}
-	if _, err := exec.LookPath("cmake"); err != nil {
-		t.Skip("cmake not found, skipping real commit build test")
-	}
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not found, skipping real commit build test")
-	}
-
-	const commit = "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
-	store := setupTestStore(t)
-	matrix := runtime.GOARCH + "-" + runtime.GOOS
-	workspaceDir := t.TempDir()
-	b := &Builder{
-		store:        store,
-		matrix:       matrix,
-		workspaceDir: workspaceDir,
-		cache:        &localCache{workspaceDir: workspaceDir},
-		newRepo:      vcs.NewRepo,
-	}
-
-	main := module.Version{Path: "madler/zlib", Version: commit}
-	ctx := context.Background()
-	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
-	if err != nil {
-		t.Fatalf("modules.Load() failed: %v", err)
-	}
-	if len(mods) != 1 {
-		t.Fatalf("loaded modules = %d, want 1", len(mods))
-	}
-	if mods[0].Version != commit {
-		t.Fatalf("selected version = %q, want %q", mods[0].Version, commit)
-	}
-
-	results, err := b.Build(ctx, mods)
-	if err != nil {
-		t.Fatalf("Build() failed: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("got %d results, want 1", len(results))
-	}
-	if results[0].Metadata != "-lz" {
-		t.Errorf("metadata = %q, want %q", results[0].Metadata, "-lz")
-	}
-
-	installDir, err := b.installDir("madler/zlib", commit)
-	if err != nil {
-		t.Fatalf("installDir() failed: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(installDir, "include", "zlib.h")); err != nil {
-		t.Fatalf("zlib.h not found at %s: %v", installDir, err)
-	}
-	if _, err := os.Stat(filepath.Join(installDir, "lib", "libz.a")); err != nil {
-		t.Fatalf("libz.a not found at %s: %v", installDir, err)
-	}
-}
-
 // TestE2E_RealLibpngCommitDependencyBuild verifies a real dependency commit
 // through the full pipeline: MVS resolves libpng's zlib commit, zlib is built
 // first from that commit, and libpng then links against the installed zlib.

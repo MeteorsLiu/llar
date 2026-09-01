@@ -25,10 +25,6 @@ func init() {
 				Name: "gnu",
 				Path: "github.com/goplus/llar/x/gnu",
 			},
-			{
-				Name: "git",
-				Path: "github.com/goplus/llar/x/git",
-			},
 		},
 	})
 	xgobuild.RegisterProject(&modfile.Project{

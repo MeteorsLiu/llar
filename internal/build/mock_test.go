@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/goplus/llar/internal/vcs"
 )
 
 // mockRepo implements vcs.Repo interface for testing.
@@ -14,13 +16,21 @@ type mockRepo struct {
 	syncRef     *string
 }
 
-func (m *mockRepo) Tags(ctx context.Context) ([]string, error) {
-	return []string{"v1.0.0", "v2.0.0"}, nil
+type mockRefs struct{}
+
+func (mockRefs) CompareFunc(a, b string, compareTag func(a, b string) int) int {
+	return compareTag(a, b)
+}
+
+func (m *mockRepo) Tags(ctx context.Context) ([]vcs.Tag, error) {
+	return []vcs.Tag{{Name: "v1.0.0"}, {Name: "v2.0.0"}}, nil
 }
 
 func (m *mockRepo) Latest(ctx context.Context) (string, error) {
 	return "abc123", nil
 }
+
+func (m *mockRepo) Refs() vcs.Refs { return mockRefs{} }
 
 func (m *mockRepo) At(ref, localDir string) fs.FS {
 	return os.DirFS(m.testdataDir)

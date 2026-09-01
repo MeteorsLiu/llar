@@ -1,3 +1,0 @@
-compareVer (a, b) => {
-	return git.CompareFunc(a, b, semver.Compare)
-}

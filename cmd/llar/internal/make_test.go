@@ -20,6 +20,7 @@ import (
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
 
@@ -473,8 +474,15 @@ func TestMakeReal_NoVersion(t *testing.T) {
 
 type noopVCSRepo struct{}
 
-func (m *noopVCSRepo) Tags(ctx context.Context) ([]string, error)                 { return nil, nil }
+type noopRefs struct{}
+
+func (noopRefs) CompareFunc(a, b string, compareTag func(a, b string) int) int {
+	return compareTag(a, b)
+}
+
+func (m *noopVCSRepo) Tags(ctx context.Context) ([]vcs.Tag, error)                { return nil, nil }
 func (m *noopVCSRepo) Latest(ctx context.Context) (string, error)                 { return "", nil }
+func (m *noopVCSRepo) Refs() vcs.Refs                                             { return noopRefs{} }
 func (m *noopVCSRepo) At(ref, localDir string) fs.FS                              { return nil }
 func (m *noopVCSRepo) Sync(ctx context.Context, ref, path, localDir string) error { return nil }
 

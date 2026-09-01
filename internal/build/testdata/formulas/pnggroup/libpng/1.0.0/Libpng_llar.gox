@@ -2,7 +2,7 @@ import "slices"
 
 id "pnggroup/libpng"
 
-fromVer "1.0.0"
+fromVer "v1.0.0"
 
 onRequire (proj, deps) => {
 	if slices.contains(target.options["zlib"], "commit") {

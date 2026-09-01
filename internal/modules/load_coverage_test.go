@@ -3,9 +3,11 @@ package modules
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -50,7 +52,7 @@ func (f fakeFile) Read(_ []byte) (int, error) { return 0, io.EOF }
 func (f fakeFile) Close() error               { return nil }
 
 type mockLatestRepo struct {
-	tags      []string
+	tags      []vcs.Tag
 	tagsErr   error
 	latest    string
 	latestErr error
@@ -58,16 +60,17 @@ type mockLatestRepo struct {
 
 var _ vcs.Repo = (*mockLatestRepo)(nil)
 
-func (m *mockLatestRepo) Tags(context.Context) ([]string, error) { return m.tags, m.tagsErr }
-func (m *mockLatestRepo) Latest(context.Context) (string, error) { return m.latest, m.latestErr }
-func (m *mockLatestRepo) At(ref, localDir string) fs.FS          { return os.DirFS(localDir) }
+func (m *mockLatestRepo) Tags(context.Context) ([]vcs.Tag, error) { return m.tags, m.tagsErr }
+func (m *mockLatestRepo) Latest(context.Context) (string, error)  { return m.latest, m.latestErr }
+func (m *mockLatestRepo) Refs() vcs.Refs                          { return mockRefs{} }
+func (m *mockLatestRepo) At(ref, localDir string) fs.FS           { return os.DirFS(localDir) }
 func (m *mockLatestRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	return nil
 }
 
 func TestLatestVersion_SelectsMaxByComparator(t *testing.T) {
 	repo := &mockLatestRepo{
-		tags: []string{"v2", "v10", "v3"},
+		tags: []vcs.Tag{{Name: "v2"}, {Name: "v10"}, {Name: "v3"}},
 	}
 
 	cmp := func(v1, v2 module.Version) int {
@@ -139,7 +142,7 @@ func TestResolveDeps_InvalidModulePath(t *testing.T) {
 	mod := module.Version{Path: "", Version: "1.0.0"}
 	frla := &formula.Formula{ModPath: "", FromVer: "1.0.0"}
 
-	_, err := resolveDeps(mod, modFS, frla)
+	_, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err == nil {
 		t.Fatal("expected error for invalid module path")
 	}
@@ -231,7 +234,7 @@ func TestResolveDeps_InvalidDependencyPathFromVersions(t *testing.T) {
 	mod := module.Version{Path: "towner/main", Version: "1.0.0"}
 	frla := loadTestFormula(t, "testdata/load/towner/standalone", "towner/standalone", "1.0.0")
 
-	_, err := resolveDeps(mod, modFS, frla)
+	_, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err == nil {
 		t.Fatal("expected error for invalid dependency path")
 	}
@@ -245,7 +248,7 @@ func TestResolveDeps_MissingVersionsFile(t *testing.T) {
 	mod := module.Version{Path: "towner/badcmp", Version: "1.0.0"}
 	frla := loadTestFormula(t, "testdata/load/towner/standalone", "towner/standalone", "1.0.0")
 
-	_, err := resolveDeps(mod, modFS, frla)
+	_, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err == nil {
 		t.Fatal("expected error for missing versions.json")
 	}
@@ -282,8 +285,34 @@ func TestLoad_EmptyVersion_LatestVersionTagsError(t *testing.T) {
 }
 
 func TestLoad_EmptyVersion_NoTagsUsesHeadRef(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not found")
+	}
+	sourceDir := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(realGit, args...)
+		cmd.Dir = sourceDir
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	runGit("init")
+	runGit("config", "user.name", "LLAR Test")
+	runGit("config", "user.email", "llar@example.com")
+	if err := os.WriteFile(filepath.Join(sourceDir, "source.txt"), []byte("source\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	runGit("add", "source.txt")
+	runGit("commit", "-m", "initial")
+	runGit("tag", "1.0.0")
+	commitID := runGit("rev-parse", "HEAD")
+
 	fakeGitDir := t.TempDir()
-	fakeGit := "#!/bin/sh\nif [ \"$3\" = \"HEAD\" ]; then\n  printf 'deadbeef\\tHEAD\\n'\nfi\n"
+	fakeGit := fmt.Sprintf("#!/bin/sh\nif [ \"$3\" = \"HEAD\" ]; then\n  printf '%s\\tHEAD\\n'\nfi\n", commitID)
 	if err := os.WriteFile(filepath.Join(fakeGitDir, "git"), []byte(fakeGit), 0o755); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
@@ -297,8 +326,8 @@ func TestLoad_EmptyVersion_NoTagsUsesHeadRef(t *testing.T) {
 	if len(modules) != 1 {
 		t.Fatalf("loaded modules = %d, want 1", len(modules))
 	}
-	if modules[0].Version != "deadbeef" {
-		t.Fatalf("main version = %q, want %q", modules[0].Version, "deadbeef")
+	if modules[0].Version != commitID {
+		t.Fatalf("main version = %q, want %q", modules[0].Version, commitID)
 	}
 }
 
@@ -315,7 +344,7 @@ func TestResolveDeps_OnRequireMkdirTempError(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/withreq", Version: "1.0.0"}
 
-	_, err := resolveDeps(mod, modFS, frla)
+	_, err := resolveDeps(mod, modFS, frla, &mockVCSRepo{})
 	if err == nil {
 		t.Fatal("expected MkdirTemp error")
 	}

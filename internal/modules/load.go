@@ -71,10 +71,10 @@ func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparato
 	if len(tags) == 0 {
 		return repo.Latest(ctx)
 	}
-	max := slices.MaxFunc(tags, func(a, b string) int {
-		return comparator(module.Version{modPath, a}, module.Version{modPath, b})
+	max := slices.MaxFunc(tags, func(a, b vcs.Tag) int {
+		return comparator(module.Version{modPath, a.Name}, module.Version{modPath, b.Name})
 	})
-	return max, nil
+	return max.Name, nil
 }
 
 // formulaContext groups helper functions used throughout the Load process,
@@ -115,7 +115,12 @@ func (c *formulaContext) moduleOf(ctx context.Context, modPath string) (*formula
 	if err != nil {
 		return nil, err
 	}
-	fm := newFormulaModule(fs, modPath, c.matrix)
+	// TODO(MeteorsLiu): Support different code host sites.
+	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", modPath))
+	if err != nil {
+		return nil, err
+	}
+	fm := newFormulaModule(fs, modPath, c.matrix, repo)
 	actual, _ := c.moduleCache.LoadOrStore(modPath, fm)
 	return actual.(*formulaModule), nil
 }
@@ -130,7 +135,7 @@ func (c *formulaContext) loadDeps(ctx context.Context, mod module.Version) (deps
 	if err != nil {
 		return nil, err
 	}
-	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f)
+	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f, thisMod.repo)
 }
 
 // convertToModules converts a list of module.Version into loaded Module structs.
@@ -177,12 +182,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if err != nil {
 			return nil, err
 		}
-		// TODO(MeteorsLiu): Support different code host sites
-		latestRepo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", main.Path))
-		if err != nil {
-			return nil, err
-		}
-		latest, err := latestVersion(ctx, main.Path, latestRepo, cmp)
+		latest, err := latestVersion(ctx, main.Path, mainMod.repo, cmp)
 		if err != nil {
 			return nil, err
 		}
@@ -192,7 +192,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	if err != nil {
 		return nil, err
 	}
-	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula)
+	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula, mainMod.repo)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +287,7 @@ func runFormulaHook(fn func()) (err error) {
 // resolveDeps resolves the dependencies for a formula.
 // It first tries to get dependencies from the OnRequire callback,
 // then falls back to parsing versions.json if no dependencies are found.
-func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula) ([]module.Version, error) {
+func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula, repo vcs.Repo) ([]module.Version, error) {
 	if err := validateModulePath(mod.Path); err != nil {
 		return nil, err
 	}
@@ -306,11 +306,6 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 
 	var deps classfile.ModuleDeps
 
-	// TODO(MeteorsLiu): Support different code host sites.
-	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mod.Path))
-	if err != nil {
-		return nil, err
-	}
 	// onRequire is optional
 	if frla.OnRequire != nil {
 		// TODO(MeteorsLiu): Design source cache dir
