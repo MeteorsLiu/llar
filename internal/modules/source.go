@@ -104,7 +104,7 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 
 	if f, ok := m.formulas[fromVer]; ok {
 		clone := formula.Clone(f)
-		injectMatrix(clone, m.matrix)
+		injectTarget(clone, version, m.matrix)
 		return clone, nil
 	}
 	f, err := formula.LoadFS(m.fsys.(fs.ReadFileFS), formulaPath)
@@ -114,7 +114,7 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 	}
 	m.formulas[fromVer] = f
 	clone := formula.Clone(f)
-	injectMatrix(clone, m.matrix)
+	injectTarget(clone, version, m.matrix)
 	return clone, nil
 }
 
