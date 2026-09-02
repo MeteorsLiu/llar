@@ -77,7 +77,8 @@ type Formula struct {
 //	    new(hello).Main()
 //	}
 //
-// The struct name is derived from the filename prefix before "_" (e.g., "hello" from "hello_llar.gox").
+// The struct name is the filename without the registered "_llar.gox" suffix
+// (e.g., "cpu_features" from "cpu_features_llar.gox").
 // Calling Main() triggers Gopt_ModuleF_Main which invokes MainEntry() to populate the struct fields.
 func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	// Formula types remain cached after loading, so later interpreters must not
@@ -119,12 +120,9 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		return nil, err
 	}
 
-	// Extract struct name from filename: "hello_llar.gox" -> "hello"
+	// Extract struct name from filename: "cpu_features_llar.gox" -> "cpu_features"
 	// The classfile mechanism generates a struct with this name
-	structName, _, ok := strings.Cut(filepath.Base(path), "_")
-	if !ok {
-		return nil, fmt.Errorf("failed to load formula: file name is not valid: %s", path)
-	}
+	structName := strings.TrimSuffix(filepath.Base(path), "_llar.gox")
 
 	// Get the generated struct type from the interpreter
 	typ, ok := interp.GetType(structName)

@@ -57,7 +57,7 @@ Classfile is a DSL (Domain Specific Language) mechanism in xgo that allows defin
    - `_cmp.gox` -> `CmpApp` class (formula/classfile.go)
 
 3. **Code Generation**: When a `.gox` file is processed:
-   - The filename prefix (before `_`) becomes the struct name
+   - The filename without the registered `_llar.gox` suffix becomes the struct name
    - Example: `hello_llar.gox` generates struct `hello` embedding `ModuleF`
    - A `MainEntry()` method is generated containing the DSL code
    - A `Main()` method calls `Gopt_ModuleF_Main(this)`
@@ -113,7 +113,7 @@ func main() {
 
 ### Key Points
 
-1. **Struct Name Derivation**: The struct name comes from `strings.Cut(filename, "_")` - the part before the first underscore
+1. **Struct Name Derivation**: The struct name comes from `strings.TrimSuffix(filename, "_llar.gox")`, preserving underscores in names such as `cpu_features`
 
 2. **Class Entry Point**: `Gopt_<ClassName>_Main` is the classfile entry point that:
    - Calls `MainEntry()` to execute DSL code
