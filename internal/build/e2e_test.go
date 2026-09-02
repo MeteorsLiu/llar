@@ -360,89 +360,105 @@ func TestE2E_RealZlibBuild(t *testing.T) {
 	}
 }
 
-// TestE2E_RealLibpngCommitDependencyBuild verifies a real dependency commit
-// through the full pipeline: MVS resolves libpng's zlib commit, zlib is built
-// first from that commit, and libpng then links against the installed zlib.
-func TestE2E_RealLibpngCommitDependencyBuild(t *testing.T) {
+// TestE2E_RealLibpngVersionComparison verifies that MVS compares competing
+// zlib tags and commits before building the selected revision and libpng.
+func TestE2E_RealLibpngVersionComparison(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping real commit dependency build test in short mode")
+		t.Skip("skipping real version comparison build test in short mode")
 	}
 	if _, err := exec.LookPath("cmake"); err != nil {
-		t.Skip("cmake not found, skipping real commit dependency build test")
+		t.Skip("cmake not found, skipping real version comparison build test")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not found, skipping real commit dependency build test")
+		t.Skip("git not found, skipping real version comparison build test")
 	}
 
-	const zlibCommit = "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
-	store := setupTestStore(t)
+	const (
+		firstCommit  = "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
+		secondCommit = "4de0b054a58bfee6974afabd831538dcedc23e22"
+	)
+	tests := []struct {
+		name  string
+		left  string
+		right string
+		want  string
+	}{
+		{name: "tag_commit", left: "v1.3.1", right: firstCommit, want: firstCommit},
+		{name: "commit_tag", left: firstCommit, right: "v1.3.1", want: firstCommit},
+		{name: "commit_commit", left: firstCommit, right: secondCommit, want: secondCommit},
+		{name: "tag_tag", left: "v1.2.11", right: "v1.3.1", want: "v1.3.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := setupTestStore(t)
+			matrix := runtime.GOARCH + "-" + runtime.GOOS
+			workspaceDir := t.TempDir()
+			b := &Builder{
+				store:        store,
+				matrix:       matrix,
+				workspaceDir: workspaceDir,
+				cache:        &localCache{workspaceDir: workspaceDir},
+				newRepo:      vcs.NewRepo,
+			}
 
-	matrix := runtime.GOARCH + "-" + runtime.GOOS
-	workspaceDir := t.TempDir()
-	b := &Builder{
-		store:        store,
-		matrix:       matrix,
-		workspaceDir: workspaceDir,
-		cache:        &localCache{workspaceDir: workspaceDir},
-		newRepo:      vcs.NewRepo,
-	}
+			main := module.Version{Path: "pnggroup/libpng", Version: "v1.6.47"}
+			ctx := context.Background()
+			mods, err := modules.Load(ctx, main, modules.Options{
+				FormulaStore: store,
+				Matrix: classfile.Matrix{
+					Options: map[string][]string{"zlib-compare": {tt.name}},
+				},
+			})
+			if err != nil {
+				t.Fatalf("modules.Load() failed: %v", err)
+			}
+			if len(mods) != 2 {
+				t.Fatalf("loaded modules = %d, want 2", len(mods))
+			}
+			var zlibMod *modules.Module
+			for _, mod := range mods {
+				if mod.Path == "madler/zlib" {
+					zlibMod = mod
+					break
+				}
+			}
+			if zlibMod == nil {
+				t.Fatal("missing madler/zlib dependency")
+			}
+			if zlibMod.Version != tt.want {
+				t.Fatalf("MVS selected %q from %q and %q, want %q", zlibMod.Version, tt.left, tt.right, tt.want)
+			}
 
-	main := module.Version{Path: "pnggroup/libpng", Version: "v1.6.47"}
-	ctx := context.Background()
-	mods, err := modules.Load(ctx, main, modules.Options{
-		FormulaStore: store,
-		Matrix: classfile.Matrix{
-			Options: map[string][]string{"zlib": {"commit"}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("modules.Load() failed: %v", err)
-	}
-	if len(mods) != 2 {
-		t.Fatalf("loaded modules = %d, want 2", len(mods))
-	}
-	var zlibMod *modules.Module
-	for _, mod := range mods {
-		if mod.Path == "madler/zlib" {
-			zlibMod = mod
-			break
-		}
-	}
-	if zlibMod == nil {
-		t.Fatal("missing madler/zlib dependency")
-	}
-	if zlibMod.Version != zlibCommit {
-		t.Fatalf("zlib dependency version = %q, want %q", zlibMod.Version, zlibCommit)
-	}
+			results, err := b.Build(ctx, mods)
+			if err != nil {
+				t.Fatalf("Build() failed: %v", err)
+			}
+			if len(results) != 2 {
+				t.Fatalf("got %d results, want 2", len(results))
+			}
+			zlibResult, ok := findResult(results, b, mods, "madler/zlib")
+			if !ok {
+				t.Fatal("missing zlib build result")
+			}
+			if zlibResult.Metadata != "-lz" {
+				t.Fatalf("zlib metadata = %q, want %q", zlibResult.Metadata, "-lz")
+			}
+			pngResult, ok := findResult(results, b, mods, "pnggroup/libpng")
+			if !ok {
+				t.Fatal("missing libpng build result")
+			}
+			if pngResult.Metadata != "-lpng" {
+				t.Fatalf("libpng metadata = %q, want %q", pngResult.Metadata, "-lpng")
+			}
 
-	results, err := b.Build(ctx, mods)
-	if err != nil {
-		t.Fatalf("Build() failed: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2", len(results))
-	}
-	zlibResult, ok := findResult(results, b, mods, "madler/zlib")
-	if !ok {
-		t.Fatal("missing zlib build result")
-	}
-	if zlibResult.Metadata != "-lz" {
-		t.Fatalf("zlib metadata = %q, want %q", zlibResult.Metadata, "-lz")
-	}
-	pngResult, ok := findResult(results, b, mods, "pnggroup/libpng")
-	if !ok {
-		t.Fatal("missing libpng build result")
-	}
-	if pngResult.Metadata != "-lpng" {
-		t.Fatalf("libpng metadata = %q, want %q", pngResult.Metadata, "-lpng")
-	}
-
-	installDir, err := b.installDir("pnggroup/libpng", "v1.6.47")
-	if err != nil {
-		t.Fatalf("installDir() failed: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(installDir, "include", "libpng16", "png.h")); err != nil {
-		t.Fatalf("png.h not found at %s: %v", installDir, err)
+			installDir, err := b.installDir("pnggroup/libpng", "v1.6.47")
+			if err != nil {
+				t.Fatalf("installDir() failed: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(installDir, "include", "libpng16", "png.h")); err != nil {
+				t.Fatalf("png.h not found at %s: %v", installDir, err)
+			}
+		})
 	}
 }
 
