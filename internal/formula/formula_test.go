@@ -51,6 +51,17 @@ func TestLoadFS(t *testing.T) {
 		f.OnTest(&formulapkg.Context{})
 	})
 
+	t.Run("UnderscoreInStructName", func(t *testing.T) {
+		fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
+		f, err := LoadFS(fsys, "cpu_features_llar.gox")
+		if err != nil {
+			t.Fatalf("LoadFS failed: %v", err)
+		}
+		if f.ModPath != "google/cpu_features" {
+			t.Fatalf("ModPath = %q, want %q", f.ModPath, "google/cpu_features")
+		}
+	})
+
 	t.Run("NonExistentFile", func(t *testing.T) {
 		fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
 		_, err := LoadFS(fsys, "nonexistent.gox")
