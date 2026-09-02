@@ -176,7 +176,7 @@ func TestFormulaModule_AtReturnsIsolatedClasses(t *testing.T) {
 }
 
 func TestFormulaModule_AtInjectsTargetVersion(t *testing.T) {
-	mod := newFormulaModule(os.DirFS("testdata/load/towner/targetversion"), "towner/targetversion", classfile.Matrix{})
+	mod := newFormulaModule(os.DirFS("testdata/load/towner/targetversion"), "towner/targetversion", classfile.Matrix{}, &mockVCSRepo{})
 
 	for _, version := range []string{"1.0.0", "release/1.1.0"} {
 		f, err := mod.at(version)
