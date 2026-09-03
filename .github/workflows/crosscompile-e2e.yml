@@ -2,6 +2,7 @@ name: Cross Compile E2E (Linux hosts to arm64 targets)
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -14,11 +15,18 @@ concurrency:
 jobs:
   build-linux-arm64:
     name: "Build C libs: Linux amd64 -> Linux arm64"
-    runs-on: ubuntu-24.04
+    runs-on: [qiniu, ubuntu-24.04]
     timeout-minutes: 25
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+
+      - name: Configure Go environment
+        run: |
+          echo "GOPATH=${RUNNER_TEMP}/go" >> "$GITHUB_ENV"
+          echo "GOBIN=${RUNNER_TEMP}/go/bin" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=${RUNNER_TEMP}/go/pkg/mod" >> "$GITHUB_ENV"
+          echo "GOCACHE=${RUNNER_TEMP}/go-build-cache" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -313,11 +321,18 @@ jobs:
 
   build-darwin-arm64:
     name: "Build zlib: Linux amd64 host to Darwin arm64 target"
-    runs-on: ubuntu-24.04
+    runs-on: [qiniu, ubuntu-24.04]
     timeout-minutes: 25
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+
+      - name: Configure Go environment
+        run: |
+          echo "GOPATH=${RUNNER_TEMP}/go" >> "$GITHUB_ENV"
+          echo "GOBIN=${RUNNER_TEMP}/go/bin" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=${RUNNER_TEMP}/go/pkg/mod" >> "$GITHUB_ENV"
+          echo "GOCACHE=${RUNNER_TEMP}/go-build-cache" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
