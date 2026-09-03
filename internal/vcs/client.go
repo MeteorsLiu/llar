@@ -8,12 +8,21 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"time"
 )
+
+type refInfo struct {
+	commit string
+	time   time.Time
+}
 
 // client defines the internal interface for interacting with code hosting platforms.
 type client interface {
+	ref(owner, repo, ref string) (refInfo, error)
+	ancestors(owner, repo, ref string) ([]string, error)
+
 	// Tags returns all tags from the repository.
-	Tags(ctx context.Context, owner, repo string) ([]string, error)
+	Tags(ctx context.Context, owner, repo string) ([]Tag, error)
 
 	// Latest returns the latest commit hash on the default branch.
 	Latest(ctx context.Context, owner, repo string) (string, error)

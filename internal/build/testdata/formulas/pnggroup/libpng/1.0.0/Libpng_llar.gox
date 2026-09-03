@@ -1,9 +1,26 @@
+import "slices"
+
 id "pnggroup/libpng"
 
-fromVer "1.0.0"
+fromVer "v1.0.0"
 
 onRequire (proj, deps) => {
-	deps.require "madler/zlib", "v1.2.11"
+	compareCase := target.options["zlib-compare"]
+	if slices.contains(compareCase, "tag_commit") {
+		deps.require "madler/zlib", "v1.3.1"
+		deps.require "madler/zlib", "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
+	} else if slices.contains(compareCase, "commit_tag") {
+		deps.require "madler/zlib", "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
+		deps.require "madler/zlib", "v1.3.1"
+	} else if slices.contains(compareCase, "commit_commit") {
+		deps.require "madler/zlib", "9f0f2d4f9f1f28be7e16d8bf3b4e9d4ada70aa9f"
+		deps.require "madler/zlib", "4de0b054a58bfee6974afabd831538dcedc23e22"
+	} else if slices.contains(compareCase, "tag_tag") {
+		deps.require "madler/zlib", "v1.2.11"
+		deps.require "madler/zlib", "v1.3.1"
+	} else {
+		deps.require "madler/zlib", "v1.2.11"
+	}
 }
 
 onBuild ctx => {

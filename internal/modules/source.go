@@ -14,6 +14,7 @@ import (
 	"github.com/goplus/ixgo/xgobuild"
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/gnu"
 	"github.com/goplus/xgo/ast"
@@ -30,6 +31,7 @@ type formulaModule struct {
 	fsys       fs.FS
 	modPath    string
 	matrix     classfile.Matrix
+	repo       vcs.Repo
 	comparator func() (func(v1, v2 module.Version) int, error)
 
 	mu       sync.Mutex
@@ -39,31 +41,47 @@ type formulaModule struct {
 // newFormulaModule creates a new formulaModule for the given module.
 // The fsys should be rooted at the module's directory (already positioned by the caller).
 // The modPath is used for constructing module.Version in version comparisons.
-func newFormulaModule(fsys fs.FS, modPath string, matrix classfile.Matrix) *formulaModule {
+func newFormulaModule(fsys fs.FS, modPath string, matrix classfile.Matrix, repo vcs.Repo) *formulaModule {
 	m := &formulaModule{
 		fsys:     fsys,
 		modPath:  modPath,
 		matrix:   matrix,
+		repo:     repo,
 		formulas: make(map[string]*formula.Formula),
 	}
 	m.comparator = sync.OnceValues(func() (func(v1, v2 module.Version) int, error) {
-		return loadOrDefaultComparator(m.fsys)
+		return loadOrDefaultComparator(m.fsys, m.repo)
 	})
 	return m
 }
 
 // loadOrDefaultComparator searches for a _cmp.gox comparator file in fsys.
-// If found, it loads and returns the custom comparator.
-// If no comparator file exists, it falls back to GNU version comparison.
+// If found, it loads the custom tag comparator.
+// If no comparator file exists, it falls back to GNU tag comparison.
+// Git commit comparison is added to either comparator by default.
 // If a comparator file exists but fails to load, the error is returned.
-func loadOrDefaultComparator(fsys fs.FS) (func(v1, v2 module.Version) int, error) {
+func loadOrDefaultComparator(fsys fs.FS, repo vcs.Repo) (func(v1, v2 module.Version) int, error) {
 	matches, _ := fs.Glob(fsys, "*"+defaultComparatorSuffix)
+	var compareTag func(v1, v2 module.Version) int
 	if len(matches) == 0 {
-		return func(v1, v2 module.Version) int {
+		compareTag = func(v1, v2 module.Version) int {
 			return gnu.Compare(v1.Version, v2.Version)
-		}, nil
+		}
+	} else {
+		var err error
+		compareTag, err = loadComparatorFS(fsys.(fs.ReadFileFS), matches[0])
+		if err != nil {
+			return nil, err
+		}
 	}
-	return loadComparatorFS(fsys.(fs.ReadFileFS), matches[0])
+	return func(v1, v2 module.Version) int {
+		return repo.Refs().CompareFunc(v1.Version, v2.Version, func(a, b string) int {
+			return compareTag(
+				module.Version{Path: v1.Path, Version: a},
+				module.Version{Path: v2.Path, Version: b},
+			)
+		})
+	}, nil
 }
 
 // at returns the formula for the specified version.

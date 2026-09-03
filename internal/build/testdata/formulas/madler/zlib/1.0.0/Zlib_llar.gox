@@ -1,6 +1,6 @@
 id "madler/zlib"
 
-fromVer "1.0.0"
+fromVer "v1.2.9"
 
 onBuild ctx => {
 	installDir := ctx.outputDir
