@@ -471,9 +471,6 @@ func TestMakeReal_InstallsBeforeBuild(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("LLAR Cloud builds for other hosts require the cross sysroot formulas")
-	}
 
 	formulaDir := setupLocalFormulas(t)
 	isolatedWorkspaceDir(t)
@@ -483,12 +480,15 @@ func TestMakeReal_InstallsBeforeBuild(t *testing.T) {
 	os.Chdir(formulaDir)
 	defer os.Chdir(origDir)
 
-	out, err := runMakeCmd(t, "./madler/zlib@v1.3.1")
+	stdout, stderr, err := runMakeCmdStreams(t, "./madler/zlib@v1.3.1")
 	if err != nil {
 		t.Fatalf("llar make failed: %v", err)
 	}
-	if !strings.Contains(out, "-lz") {
-		t.Fatalf("metadata = %q, want -lz", out)
+	if !strings.Contains(stdout, "-lz") {
+		t.Fatalf("metadata = %q, want -lz", stdout)
+	}
+	if !strings.Contains(stderr, "resolving madler/zlib@v1.3.1") {
+		t.Fatalf("install progress missing from stderr:\n%s", stderr)
 	}
 }
 

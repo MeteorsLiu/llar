@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -137,9 +136,6 @@ func TestTestLocal_NotFound(t *testing.T) {
 func TestTestReal_InstallsBeforeBuild(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
-	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("LLAR Cloud builds for other hosts require the cross sysroot formulas")
 	}
 
 	formulaDir := setupLocalFormulas(t)
