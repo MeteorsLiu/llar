@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -127,5 +128,33 @@ func TestTestLocal_NotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to parse") {
 		t.Errorf("expected 'failed to parse' error, got: %v", err)
+	}
+}
+
+// TestTestReal_InstallsBeforeBuild verifies `llar test` also reuses an
+// existing LLAR Cloud build. GitHub source clones are disabled, so onTest can
+// only run against artifacts fetched through install.
+func TestTestReal_InstallsBeforeBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("LLAR Cloud builds for other hosts require the cross sysroot formulas")
+	}
+
+	formulaDir := setupLocalFormulas(t)
+	isolatedWorkspaceDir(t)
+	blockGitHubClones(t)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(formulaDir)
+	defer os.Chdir(origDir)
+
+	out, err := runTestCmd(t, "./madler/zlib@v1.3.1")
+	if err != nil {
+		t.Fatalf("llar test failed: %v", err)
+	}
+	if !strings.Contains(out, "-lz") {
+		t.Fatalf("metadata = %q, want -lz", out)
 	}
 }

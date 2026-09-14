@@ -464,6 +464,46 @@ func TestMakeReal_NoVersion(t *testing.T) {
 	}
 }
 
+// TestMakeReal_InstallsBeforeBuild verifies the install-before-build path
+// against the real LLAR Cloud service. GitHub source clones are disabled, so
+// the command can only succeed when the build comes from `llar install`.
+func TestMakeReal_InstallsBeforeBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("LLAR Cloud builds for other hosts require the cross sysroot formulas")
+	}
+
+	formulaDir := setupLocalFormulas(t)
+	isolatedWorkspaceDir(t)
+	blockGitHubClones(t)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(formulaDir)
+	defer os.Chdir(origDir)
+
+	out, err := runMakeCmd(t, "./madler/zlib@v1.3.1")
+	if err != nil {
+		t.Fatalf("llar make failed: %v", err)
+	}
+	if !strings.Contains(out, "-lz") {
+		t.Fatalf("metadata = %q, want -lz", out)
+	}
+}
+
+// blockGitHubClones makes every github.com clone fail, so a passing build
+// proves the artifacts came from the install service instead of a source build.
+func blockGitHubClones(t *testing.T) {
+	t.Helper()
+	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	content := "[url \"https://127.0.0.1:1/\"]\n\tinsteadOf = https://github.com/\n"
+	if err := os.WriteFile(gitConfig, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
+}
+
 // TODO: resolve dynamic library symlink issue
 // func TestMakeReal_OutputDir(t *testing.T) {
 // 	if testing.Short() {
