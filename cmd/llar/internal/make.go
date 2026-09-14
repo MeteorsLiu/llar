@@ -13,6 +13,7 @@ import (
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/crosscompile"
+	"github.com/goplus/llar/internal/crosscompile/c"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/modules/modlocal"
@@ -174,8 +175,19 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 	}
 
 	// Reuse existing LLAR Cloud builds when available, and fall back to source
-	// builds for the remaining build objects.
+	// builds for the remaining build objects, including the cross sysroot.
+	installMods := make([]module.Version, 0, len(mods)+1)
 	for _, mod := range mods {
+		installMods = append(installMods, module.Version{Path: mod.Path, Version: mod.Version})
+	}
+	if crossCompile {
+		if sysroot, ok := c.Sysroot(targetOS, targetArch); ok && sysroot.Path != modPath {
+			if _, customLibc := matrix.Require["libc"]; !customLibc {
+				installMods = append(installMods, sysroot)
+			}
+		}
+	}
+	for _, mod := range installMods {
 		installArg := mod.Path
 		if mod.Version != "" {
 			installArg += "@" + mod.Version
