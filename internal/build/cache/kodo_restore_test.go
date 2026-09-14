@@ -5,17 +5,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/goplus/llar/internal/artifact"
+	"github.com/goplus/llar/internal/artifact/archiver"
+	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/mod/module"
 	qiniuclient "github.com/qiniu/go-sdk/v7/client"
 )
 
 func TestKodoObjectName(t *testing.T) {
-	c := NewKodo(KodoConfig{Prefix: "/cache/"}).(*kodoCache)
+	c := newAuthenticatedKodo(KodoConfig{Prefix: "/cache/"})
 	key := Key{
 		Module: module.Version{Path: "madler/zlib", Version: "v1.3.2"},
 		Matrix: "amd64-linux",
@@ -32,15 +36,79 @@ func TestKodoObjectName(t *testing.T) {
 	}
 }
 
+func newAuthenticatedKodo(cfg KodoConfig) *kodoCache {
+	cfg.AccessKey = "test-access-key"
+	cfg.SecretKey = "test-secret-key"
+	return NewKodo(cfg).(*kodoCache)
+}
+
+func TestKodoPublicGet(t *testing.T) {
+	workspaceDir := t.TempDir()
+	key := Key{
+		Module: module.Version{Path: "test/liba", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+	installDir := filepath.Join(workspaceDir, "test", "liba@1.0.0-amd64-linux")
+	meta, err := metadata.Encode(metadata.Info{Metadata: "-L" + installDir + "/lib -lpublic"}, installDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "include"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "include", "liba.h"), []byte("liba"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "artifact.tar.gz")
+	if err := archiver.Pack(source, archive, meta); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/test/liba/1.0.0/amd64-linux.tar.gz" {
+			_, _ = w.Write(body)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	c := NewKodo(KodoConfig{PublicDomain: server.URL, WorkspaceDir: workspaceDir}).(*kodoCache)
+	entry, ok, err := c.Get(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("Get miss, want hit")
+	}
+	if want := "-L" + installDir + "/lib -lpublic"; entry.Metadata != want {
+		t.Fatalf("metadata = %q, want %q", entry.Metadata, want)
+	}
+	if data, err := os.ReadFile(filepath.Join(installDir, "include", "liba.h")); err != nil || string(data) != "liba" {
+		t.Fatalf("restored header = %q, %v", data, err)
+	}
+
+	missing := key
+	missing.Module.Version = "2.0.0"
+	if _, ok, err := c.Get(context.Background(), missing); err != nil || ok {
+		t.Fatalf("missing Get = ok:%v err:%v, want miss", ok, err)
+	}
+}
+
 func TestKodoGetArtifactMissAndError(t *testing.T) {
 	key := Key{
 		Module: module.Version{Path: "madler/zlib", Version: "v1.3.2"},
 		Matrix: "linux-amd64",
 	}
 	t.Run("miss", func(t *testing.T) {
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			Artifacts: &recordingArtifactStore{err: artifact.ErrNotFound},
-		}).(*kodoCache)
+		})
 		if _, ok, err := c.Get(context.Background(), key); err != nil {
 			t.Fatal(err)
 		} else if ok {
@@ -49,28 +117,28 @@ func TestKodoGetArtifactMissAndError(t *testing.T) {
 	})
 	t.Run("store error", func(t *testing.T) {
 		wantErr := errors.New("artifact store failed")
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			Artifacts: &recordingArtifactStore{err: wantErr},
-		}).(*kodoCache)
+		})
 		if _, _, err := c.Get(context.Background(), key); !errors.Is(err, wantErr) {
 			t.Fatalf("Get error = %v, want %v", err, wantErr)
 		}
 	})
 	t.Run("workspace required", func(t *testing.T) {
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			Artifacts: &recordingArtifactStore{art: artifact.Artifact{Type: "tar.gz"}},
-		}).(*kodoCache)
+		})
 		if _, _, err := c.Get(context.Background(), key); err == nil {
 			t.Fatal("Get should require a workspace for an artifact hit")
 		}
 	})
 	t.Run("invalid install path", func(t *testing.T) {
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			WorkspaceDir: t.TempDir(),
 			Artifacts: &recordingArtifactStore{art: artifact.Artifact{
 				Type: "tar.gz",
 			}},
-		}).(*kodoCache)
+		})
 		if _, _, err := c.Get(context.Background(), Key{Matrix: "linux-amd64"}); err == nil {
 			t.Fatal("Get should fail for empty module path")
 		}
@@ -88,7 +156,7 @@ func TestKodoPutLocalErrors(t *testing.T) {
 	}
 
 	t.Run("empty bucket", func(t *testing.T) {
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			PublicDomain: "https://cdn.example.com",
 			Artifacts:    &recordingArtifactStore{},
 		})
@@ -99,7 +167,7 @@ func TestKodoPutLocalErrors(t *testing.T) {
 
 	t.Run("temp file", func(t *testing.T) {
 		t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			Bucket:       "bucket",
 			PublicDomain: "https://cdn.example.com",
 			Artifacts:    &recordingArtifactStore{},
@@ -114,7 +182,7 @@ func TestKodoPutLocalErrors(t *testing.T) {
 		if err := os.Symlink("target", filepath.Join(src, "link")); err != nil {
 			t.Fatal(err)
 		}
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			Bucket:       "bucket",
 			PublicDomain: "https://cdn.example.com",
 			Artifacts:    &recordingArtifactStore{},
@@ -125,7 +193,7 @@ func TestKodoPutLocalErrors(t *testing.T) {
 	})
 
 	t.Run("source url", func(t *testing.T) {
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			Bucket:       "bucket",
 			PublicDomain: "ftp://cdn.example.com",
 			Artifacts:    &recordingArtifactStore{},
@@ -138,7 +206,7 @@ func TestKodoPutLocalErrors(t *testing.T) {
 	t.Run("upload", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			AccessKey:    "ak",
 			SecretKey:    "sk",
 			Bucket:       "bucket",
@@ -159,10 +227,10 @@ func TestKodoRestoreLocalErrors(t *testing.T) {
 
 	t.Run("temp file", func(t *testing.T) {
 		t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			Bucket:       "bucket",
 			WorkspaceDir: t.TempDir(),
-		}).(*kodoCache)
+		})
 		if _, err := c.restore(context.Background(), key, c.objectName(key), "tar.gz", ""); err == nil {
 			t.Fatal("restore should fail when temp dir is missing")
 		}
@@ -171,12 +239,12 @@ func TestKodoRestoreLocalErrors(t *testing.T) {
 	t.Run("download", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		c := NewKodo(KodoConfig{
+		c := newAuthenticatedKodo(KodoConfig{
 			AccessKey:    "ak",
 			SecretKey:    "sk",
 			Bucket:       "bucket",
 			WorkspaceDir: t.TempDir(),
-		}).(*kodoCache)
+		})
 		if _, err := c.restore(ctx, key, c.objectName(key), "tar.gz", ""); err == nil {
 			t.Fatal("restore should fail with canceled context")
 		}

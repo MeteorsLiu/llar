@@ -85,6 +85,19 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// defaultWorkspaceDir returns the default LLAR workspace directory.
+func defaultWorkspaceDir() (string, error) {
+	userCacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	workspaceDir := filepath.Join(userCacheDir, ".llar", "workspaces")
+	if err := os.MkdirAll(workspaceDir, 0o700); err != nil {
+		return "", err
+	}
+	return workspaceDir, nil
+}
+
 func install(ctx context.Context, progress io.Writer, serviceURL, arg string, matrix formula.Matrix) (moduleOutputResult, error) {
 	modPath, version, isLocal, err := parseModuleArg(arg)
 	if err != nil {
@@ -130,12 +143,8 @@ func install(ctx context.Context, progress io.Writer, serviceURL, arg string, ma
 		return moduleOutputResult{}, err
 	}
 
-	userCacheDir, err := os.UserCacheDir()
+	workspaceDir, err := defaultWorkspaceDir()
 	if err != nil {
-		return moduleOutputResult{}, err
-	}
-	workspaceDir := filepath.Join(userCacheDir, ".llar", "workspaces")
-	if err := os.MkdirAll(workspaceDir, 0o700); err != nil {
 		return moduleOutputResult{}, err
 	}
 	cache := build.NewLocalCache(workspaceDir)

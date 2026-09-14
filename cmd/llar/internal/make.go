@@ -5,6 +5,7 @@ import (
 	"fmt"
 	stdbuild "go/build"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,8 +13,8 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
+	buildcache "github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/crosscompile"
-	"github.com/goplus/llar/internal/crosscompile/c"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/modules/modlocal"
@@ -37,6 +38,28 @@ var newRemoteStore = func() (repo.Store, error) {
 		return nil, err
 	}
 	return repo.New(formulaDir, formulaRepo), nil
+}
+
+// publicKodoDomain serves published build artifacts without credentials.
+var publicKodoDomain = "https://llarpackages.xgo.dev"
+
+// readThroughCache reads published artifacts from remote and falls back to the
+// local workspace cache, which also stores locally built artifacts.
+type readThroughCache struct {
+	remote buildcache.Cache
+	local  buildcache.Cache
+}
+
+func (c readThroughCache) Get(ctx context.Context, key buildcache.Key) (buildcache.Entry, bool, error) {
+	entry, ok, err := c.remote.Get(ctx, key)
+	if err != nil || ok {
+		return entry, ok, err
+	}
+	return c.local.Get(ctx, key)
+}
+
+func (c readThroughCache) Put(ctx context.Context, key buildcache.Key, output fs.FS, entry buildcache.Entry) (buildcache.Entry, error) {
+	return c.local.Put(ctx, key, output, entry)
 }
 
 var makeCmd = &cobra.Command{
@@ -174,27 +197,21 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		buildOpts.WorkspaceDir = tmpDir
 	}
 
-	// Reuse existing LLAR Cloud builds when available, and fall back to source
-	// builds for the remaining build objects, including the cross sysroot.
-	installMods := make([]module.Version, 0, len(mods)+1)
-	for _, mod := range mods {
-		installMods = append(installMods, module.Version{Path: mod.Path, Version: mod.Version})
+	if buildOpts.WorkspaceDir == "" {
+		workspaceDir, err := defaultWorkspaceDir()
+		if err != nil {
+			return fmt.Errorf("failed to get workspace dir: %w", err)
+		}
+		buildOpts.WorkspaceDir = workspaceDir
 	}
-	if crossCompile {
-		if sysroot, ok := c.Sysroot(targetOS, targetArch); ok && sysroot.Path != modPath {
-			if _, customLibc := matrix.Require["libc"]; !customLibc {
-				installMods = append(installMods, sysroot)
-			}
-		}
-	}
-	for _, mod := range installMods {
-		installArg := mod.Path
-		if mod.Version != "" {
-			installArg += "@" + mod.Version
-		}
-		if _, err := install(ctx, buildOutput, llardServiceURL, installArg, matrix); err != nil {
-			fmt.Fprintf(buildOutput, "llar: install %s unavailable, building from source: %v\n", installArg, err)
-		}
+	// Reuse published artifacts from the public Kodo store when available, and
+	// fall back to the local workspace cache and source builds otherwise.
+	buildOpts.Cache = readThroughCache{
+		remote: buildcache.NewKodo(buildcache.KodoConfig{
+			PublicDomain: publicKodoDomain,
+			WorkspaceDir: buildOpts.WorkspaceDir,
+		}),
+		local: build.NewLocalCache(buildOpts.WorkspaceDir),
 	}
 
 	target, err := crosscompile.Load(ctx, root, crosscompile.Config{

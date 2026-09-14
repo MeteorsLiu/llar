@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -44,6 +45,7 @@ type kodoCache struct {
 	prefix       string
 	workspaceDir string
 	artifacts    artifact.Store
+	public       bool
 	credentials  *credentials.Credentials
 	objects      *objects.ObjectsManager
 	uploader     *uploader.UploadManager
@@ -51,28 +53,38 @@ type kodoCache struct {
 }
 
 func NewKodo(cfg KodoConfig) Cache {
-	cred := credentials.NewCredentials(cfg.AccessKey, cfg.SecretKey)
-	options := httpclient.Options{Credentials: cred}
-	return &kodoCache{
+	c := &kodoCache{
 		bucket:       cfg.Bucket,
 		publicDomain: normalizePublicDomain(cfg.PublicDomain),
 		prefix:       strings.Trim(cfg.Prefix, "/"),
 		workspaceDir: cfg.WorkspaceDir,
 		artifacts:    cfg.Artifacts,
-		credentials:  cred,
-		objects: objects.NewObjectsManager(&objects.ObjectsManagerOptions{
-			Options: options,
-		}),
-		uploader: uploader.NewUploadManager(&uploader.UploadManagerOptions{
-			Options: options,
-		}),
-		downloader: qiniudownloader.NewDownloadManager(&qiniudownloader.DownloadManagerOptions{
-			Options: options,
-		}),
 	}
+	if cfg.AccessKey == "" && cfg.SecretKey == "" {
+		// Without credentials the cache reads artifacts from the public
+		// domain and never uploads.
+		c.public = true
+		return c
+	}
+	cred := credentials.NewCredentials(cfg.AccessKey, cfg.SecretKey)
+	options := httpclient.Options{Credentials: cred}
+	c.credentials = cred
+	c.objects = objects.NewObjectsManager(&objects.ObjectsManagerOptions{
+		Options: options,
+	})
+	c.uploader = uploader.NewUploadManager(&uploader.UploadManagerOptions{
+		Options: options,
+	})
+	c.downloader = qiniudownloader.NewDownloadManager(&qiniudownloader.DownloadManagerOptions{
+		Options: options,
+	})
+	return c
 }
 
 func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
+	if c.public {
+		return c.getPublic(ctx, key)
+	}
 	art, err := c.artifacts.Get(ctx, artifact.Key{
 		Module:    key.Module.Path,
 		Version:   key.Module.Version,
@@ -103,7 +115,68 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 	return Entry{Metadata: info.Metadata, Deps: info.Deps}, true, nil
 }
 
+// getPublic fetches an artifact from the public domain without credentials.
+// Unavailable or failing downloads are reported as a cache miss so callers
+// can fall back to a source build.
+func (c *kodoCache) getPublic(ctx context.Context, key Key) (Entry, bool, error) {
+	if c.workspaceDir == "" {
+		return Entry{}, false, errors.New("kodo cache workspace dir is required")
+	}
+	objectName := c.objectName(key)
+	sourceURL, err := kodoSourceURL(c.publicDomain, objectName)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return Entry{}, false, nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Entry{}, false, nil
+	}
+	file, err := os.CreateTemp("", "llar-kodo-public-*.tar.gz")
+	if err != nil {
+		return Entry{}, false, err
+	}
+	fileName := file.Name()
+	defer os.Remove(fileName)
+	if _, err := io.Copy(file, resp.Body); err != nil {
+		_ = file.Close()
+		return Entry{}, false, err
+	}
+	if err := file.Close(); err != nil {
+		return Entry{}, false, err
+	}
+	installDir, err := c.installDir(key)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	if err := os.RemoveAll(installDir); err != nil {
+		return Entry{}, false, err
+	}
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		return Entry{}, false, err
+	}
+	data, err := archiver.Unpack(fileName, installDir)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	info, err := metadata.Decode(data, installDir)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	return Entry{Metadata: info.Metadata, Deps: info.Deps}, true, nil
+}
+
 func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry) (Entry, error) {
+	if c.public {
+		return Entry{}, errors.New("kodo cache requires credentials to put artifacts")
+	}
 	objectName := c.objectName(key)
 	putPolicy, err := uptoken.NewPutPolicyWithKey(c.bucket, objectName, time.Now().Add(time.Hour))
 	if err != nil {

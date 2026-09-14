@@ -130,16 +130,16 @@ func TestTestLocal_NotFound(t *testing.T) {
 	}
 }
 
-// TestTestReal_InstallsBeforeBuild verifies `llar test` also reuses an
-// existing LLAR Cloud build. GitHub source clones are disabled, so onTest can
-// only run against artifacts fetched through install.
-func TestTestReal_InstallsBeforeBuild(t *testing.T) {
+// TestTestReal_ReusesPublishedArtifact verifies `llar test` also reuses the
+// artifact published on the public Kodo domain. GitHub source clones are
+// disabled, so onTest can only run against the restored artifact.
+func TestTestReal_ReusesPublishedArtifact(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
 	formulaDir := setupLocalFormulas(t)
-	isolatedWorkspaceDir(t)
+	workspaceDir := isolatedWorkspaceDir(t)
 	blockGitHubClones(t)
 
 	origDir, _ := os.Getwd()
@@ -152,5 +152,9 @@ func TestTestReal_InstallsBeforeBuild(t *testing.T) {
 	}
 	if !strings.Contains(out, "-lz") {
 		t.Fatalf("metadata = %q, want -lz", out)
+	}
+	installDir := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.3.1-%s", computeMatrixStr()))
+	if _, err := os.Stat(filepath.Join(installDir, "include", "zlib.h")); err != nil {
+		t.Fatalf("published artifact not restored at %s: %v", installDir, err)
 	}
 }

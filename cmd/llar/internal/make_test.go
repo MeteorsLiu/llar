@@ -464,31 +464,33 @@ func TestMakeReal_NoVersion(t *testing.T) {
 	}
 }
 
-// TestMakeReal_InstallsBeforeBuild verifies the install-before-build path
-// against the real LLAR Cloud service. GitHub source clones are disabled, so
-// the command can only succeed when the build comes from `llar install`.
-func TestMakeReal_InstallsBeforeBuild(t *testing.T) {
+// TestMakeReal_ReusesPublishedArtifact verifies that `llar make` reuses the
+// artifact published on the public Kodo domain instead of building from
+// source. GitHub source clones are disabled, and the local formula installs no
+// files, so the restored artifact is the only source of the installed header.
+func TestMakeReal_ReusesPublishedArtifact(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
 	formulaDir := setupLocalFormulas(t)
-	isolatedWorkspaceDir(t)
+	workspaceDir := isolatedWorkspaceDir(t)
 	blockGitHubClones(t)
 
 	origDir, _ := os.Getwd()
 	os.Chdir(formulaDir)
 	defer os.Chdir(origDir)
 
-	stdout, stderr, err := runMakeCmdStreams(t, "./madler/zlib@v1.3.1")
+	out, err := runMakeCmd(t, "./madler/zlib@v1.3.1")
 	if err != nil {
 		t.Fatalf("llar make failed: %v", err)
 	}
-	if !strings.Contains(stdout, "-lz") {
-		t.Fatalf("metadata = %q, want -lz", stdout)
+	if !strings.Contains(out, "-lz") {
+		t.Fatalf("metadata = %q, want -lz", out)
 	}
-	if !strings.Contains(stderr, "resolving madler/zlib@v1.3.1") {
-		t.Fatalf("install progress missing from stderr:\n%s", stderr)
+	installDir := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.3.1-%s", computeMatrixStr()))
+	if _, err := os.Stat(filepath.Join(installDir, "include", "zlib.h")); err != nil {
+		t.Fatalf("published artifact not restored at %s: %v", installDir, err)
 	}
 }
 
