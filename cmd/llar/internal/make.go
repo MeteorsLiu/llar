@@ -172,6 +172,17 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		defer os.RemoveAll(tmpDir)
 		buildOpts.WorkspaceDir = tmpDir
 	}
+
+	// Reuse an existing LLAR Cloud build when one is available, and fall back
+	// to a source build otherwise.
+	installArg := modPath
+	if version != "" {
+		installArg += "@" + version
+	}
+	if _, err := install(ctx, buildOutput, llardServiceURL, installArg, matrix); err != nil {
+		fmt.Fprintf(buildOutput, "llar: install %s unavailable, building from source: %v\n", installArg, err)
+	}
+
 	target, err := crosscompile.Load(ctx, root, crosscompile.Config{
 		Store:        store,
 		Matrix:       matrix,
