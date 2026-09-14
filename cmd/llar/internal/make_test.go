@@ -437,6 +437,28 @@ func TestMakeLocal_RealDemoWithRemoteZlibDep(t *testing.T) {
 	}
 }
 
+// TestBuildModule_WorkspaceDirError covers the failure to resolve the local
+// workspace that both the caches and the builder are injected with.
+func TestBuildModule_WorkspaceDirError(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	store := repo.NewOverlayStore(
+		repo.New(formulaDir, &noopVCSRepo{}),
+		map[string]string{"test/liba": filepath.Join(formulaDir, "test", "liba")},
+	)
+
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.WriteFile(home, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", "")
+
+	err := buildModule(context.Background(), store, "test/liba", "1.0.0", computeMatrix(), false)
+	if err == nil || !strings.Contains(err.Error(), "failed to get workspace dir") {
+		t.Fatalf("buildModule error = %v, want workspace dir error", err)
+	}
+}
+
 func TestMakeReal_InvalidModule(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

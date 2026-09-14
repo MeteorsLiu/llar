@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,6 +98,96 @@ func TestKodoPublicGet(t *testing.T) {
 	missing.Module.Version = "2.0.0"
 	if _, ok, err := c.Get(context.Background(), missing); err != nil || ok {
 		t.Fatalf("missing Get = ok:%v err:%v, want miss", ok, err)
+	}
+}
+
+func TestKodoPublicGetFailures(t *testing.T) {
+	key := Key{
+		Module: module.Version{Path: "test/liba", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+
+	t.Run("workspace required", func(t *testing.T) {
+		c := NewKodo(KodoConfig{PublicDomain: "https://example.com"}).(*kodoCache)
+		if _, _, err := c.Get(context.Background(), key); err == nil {
+			t.Fatal("Get should require a workspace")
+		}
+	})
+	t.Run("invalid domain", func(t *testing.T) {
+		c := NewKodo(KodoConfig{PublicDomain: "file:///tmp", WorkspaceDir: t.TempDir()}).(*kodoCache)
+		if _, _, err := c.Get(context.Background(), key); err == nil {
+			t.Fatal("Get should reject an invalid public domain")
+		}
+	})
+	t.Run("unreachable domain", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := listener.Addr().String()
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		c := NewKodo(KodoConfig{PublicDomain: "http://" + addr, WorkspaceDir: t.TempDir()}).(*kodoCache)
+		if _, ok, err := c.Get(context.Background(), key); err != nil || ok {
+			t.Fatalf("Get = ok:%v err:%v, want miss", ok, err)
+		}
+	})
+	t.Run("server error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}))
+		defer server.Close()
+		c := NewKodo(KodoConfig{PublicDomain: server.URL, WorkspaceDir: t.TempDir()}).(*kodoCache)
+		if _, ok, err := c.Get(context.Background(), key); err != nil || ok {
+			t.Fatalf("Get = ok:%v err:%v, want miss", ok, err)
+		}
+	})
+	t.Run("corrupt archive", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("not a gzip archive"))
+		}))
+		defer server.Close()
+		c := NewKodo(KodoConfig{PublicDomain: server.URL, WorkspaceDir: t.TempDir()}).(*kodoCache)
+		if _, _, err := c.Get(context.Background(), key); err == nil {
+			t.Fatal("Get should fail for a corrupt archive")
+		}
+	})
+	t.Run("temp dir unavailable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write(nil)
+		}))
+		defer server.Close()
+		t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+		c := NewKodo(KodoConfig{PublicDomain: server.URL, WorkspaceDir: t.TempDir()}).(*kodoCache)
+		if _, _, err := c.Get(context.Background(), key); err == nil {
+			t.Fatal("Get should fail without a temporary directory")
+		}
+	})
+	t.Run("install dir blocked", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write(nil)
+		}))
+		defer server.Close()
+		workspaceDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(workspaceDir, "test"), []byte("not a directory"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c := NewKodo(KodoConfig{PublicDomain: server.URL, WorkspaceDir: workspaceDir}).(*kodoCache)
+		if _, _, err := c.Get(context.Background(), key); err == nil {
+			t.Fatal("Get should fail when the install dir cannot be replaced")
+		}
+	})
+}
+
+func TestKodoPublicPutRequiresCredentials(t *testing.T) {
+	c := NewKodo(KodoConfig{PublicDomain: "https://example.com", WorkspaceDir: t.TempDir()}).(*kodoCache)
+	key := Key{
+		Module: module.Version{Path: "test/liba", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+	if _, err := c.Put(context.Background(), key, os.DirFS(t.TempDir()), Entry{}); err == nil {
+		t.Fatal("Put should require credentials")
 	}
 }
 
