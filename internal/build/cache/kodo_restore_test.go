@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/goplus/llar/internal/artifact"
@@ -188,6 +190,83 @@ func TestKodoPublicPutRequiresCredentials(t *testing.T) {
 	}
 	if _, err := c.Put(context.Background(), key, os.DirFS(t.TempDir()), Entry{}); err == nil {
 		t.Fatal("Put should require credentials")
+	}
+}
+
+func TestKodoPublicGetInvalidMetadata(t *testing.T) {
+	source := t.TempDir()
+	archive := filepath.Join(t.TempDir(), "artifact.tar.gz")
+	if err := archiver.Pack(source, archive, json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	c := NewKodo(KodoConfig{PublicDomain: server.URL, WorkspaceDir: t.TempDir()}).(*kodoCache)
+	key := Key{
+		Module: module.Version{Path: "test/liba", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+	if _, _, err := c.Get(context.Background(), key); err == nil || !strings.Contains(err.Error(), "metadata is required") {
+		t.Fatalf("Get error = %v, want metadata error", err)
+	}
+}
+
+func TestKodoPublicGetInvalidModulePath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(nil)
+	}))
+	defer server.Close()
+
+	c := NewKodo(KodoConfig{PublicDomain: server.URL, WorkspaceDir: t.TempDir()}).(*kodoCache)
+	key := Key{
+		Module: module.Version{Path: "../evil", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+	if _, _, err := c.Get(context.Background(), key); err == nil {
+		t.Fatal("Get should reject an invalid module path")
+	}
+}
+
+func TestKodoPublicGetReadOnlyWorkspace(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(nil)
+	}))
+	defer server.Close()
+
+	workspaceDir := t.TempDir()
+	if err := os.Chmod(workspaceDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(workspaceDir, 0o755) })
+
+	c := NewKodo(KodoConfig{PublicDomain: server.URL, WorkspaceDir: workspaceDir}).(*kodoCache)
+	key := Key{
+		Module: module.Version{Path: "test/liba", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+	if _, _, err := c.Get(context.Background(), key); err == nil {
+		t.Fatal("Get should fail with a read-only workspace")
+	}
+}
+
+func TestKodoPutInvalidModulePath(t *testing.T) {
+	c := newAuthenticatedKodo(KodoConfig{Bucket: "test-bucket", WorkspaceDir: t.TempDir()})
+	key := Key{
+		Module: module.Version{Path: "../evil", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+	if _, err := c.Put(context.Background(), key, os.DirFS(t.TempDir()), Entry{}); err == nil {
+		t.Fatal("Put should reject an invalid module path")
 	}
 }
 
