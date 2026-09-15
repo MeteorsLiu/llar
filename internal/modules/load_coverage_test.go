@@ -3,7 +3,6 @@ package modules
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -312,7 +311,26 @@ func TestLoad_EmptyVersion_NoTagsUsesHeadRef(t *testing.T) {
 	commitID := runGit("rev-parse", "HEAD")
 
 	fakeGitDir := t.TempDir()
-	fakeGit := fmt.Sprintf("#!/bin/sh\nif [ \"$3\" = \"HEAD\" ]; then\n  printf '%s\\tHEAD\\n'\nfi\n", commitID)
+	// Emulate a tagless remote that still resolves refs, so the comparator
+	// orders the formula tag against the HEAD commit by repository history
+	// instead of falling back to GNU version comparison.
+	fakeGit := strings.ReplaceAll(`#!/bin/sh
+case "$1" in
+ls-remote)
+  if [ "$3" = "HEAD" ]; then
+    printf '{commit}\tHEAD\n'
+  elif [ "$2" = "--heads" ]; then
+    printf '{commit}\trefs/heads/main\n'
+  fi
+  ;;
+rev-parse)
+  printf '{commit}\n'
+  ;;
+show)
+  printf '1755826800\n'
+  ;;
+esac
+`, "{commit}", commitID)
 	if err := os.WriteFile(filepath.Join(fakeGitDir, "git"), []byte(fakeGit), 0o755); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
