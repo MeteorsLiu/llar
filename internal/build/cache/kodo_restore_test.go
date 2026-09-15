@@ -103,6 +103,20 @@ func TestKodoPublicGet(t *testing.T) {
 	}
 }
 
+func TestKodoPublicArtifactType(t *testing.T) {
+	for _, tt := range []struct {
+		objectName string
+		want       string
+	}{
+		{"madler/zlib/v1.3.1/amd64-linux.tar.gz", "tar.gz"},
+		{"madler/zlib/v1.3.1/amd64-linux.zip", "zip"},
+	} {
+		if got := publicArtifactType(tt.objectName); got != tt.want {
+			t.Fatalf("publicArtifactType(%q) = %q, want %q", tt.objectName, got, tt.want)
+		}
+	}
+}
+
 func TestKodoPublicGetFailures(t *testing.T) {
 	key := Key{
 		Module: module.Version{Path: "test/liba", Version: "1.0.0"},

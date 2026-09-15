@@ -139,7 +139,7 @@ func (c *kodoCache) getPublic(ctx context.Context, key Key) (Entry, bool, error)
 	if resp.StatusCode != http.StatusOK {
 		return Entry{}, false, nil
 	}
-	file, err := os.CreateTemp("", "llar-kodo-public-*.tar.gz")
+	file, err := os.CreateTemp("", "llar-kodo-public-*."+path.Base(publicArtifactType(objectName)))
 	if err != nil {
 		return Entry{}, false, err
 	}
@@ -257,6 +257,14 @@ func (c *kodoCache) objectName(key Key) string {
 	}
 	parts = append(parts, strings.Trim(key.Module.Path, "/"), strings.Trim(key.Module.Version, "/"), key.Matrix+".tar.gz")
 	return strings.Join(parts, "/")
+}
+
+// publicArtifactType returns the archive type of a public object name.
+func publicArtifactType(objectName string) string {
+	if strings.HasSuffix(objectName, ".zip") {
+		return "zip"
+	}
+	return "tar.gz"
 }
 
 func (c *kodoCache) installDir(key Key) (string, error) {
