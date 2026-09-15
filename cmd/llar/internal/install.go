@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/goplus/llar/formula"
@@ -147,11 +148,16 @@ func install(ctx context.Context, progress io.Writer, serviceURL, arg string, ma
 	if err != nil {
 		return moduleOutputResult{}, err
 	}
-	cache := build.NewLocalCache(workspaceDir)
 	matrixStr := matrix.Combinations()[0]
 
-	var rootResult moduleOutputResult
-	deps := make([]moduleOutputDep, 0, len(messages)-1)
+	type installTarget struct {
+		message    installArtifactMessage
+		mod        module.Version
+		installDir string
+	}
+	targets := make([]installTarget, 0, len(messages))
+	lockPaths := make([]string, 0, len(messages))
+	locked := make(map[string]struct{}, len(messages))
 	for _, message := range messages {
 		parsed, err := url.Parse(message.ID)
 		if err != nil {
@@ -167,33 +173,72 @@ func install(ctx context.Context, progress io.Writer, serviceURL, arg string, ma
 		if err != nil {
 			return moduleOutputResult{}, fmt.Errorf("invalid artifact id %q: %w", message.ID, err)
 		}
-		installDir := filepath.Join(workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, mod.Version, matrixStr))
-		key := buildcache.Key{Module: mod, Matrix: matrixStr}
+		targets = append(targets, installTarget{
+			message:    message,
+			mod:        mod,
+			installDir: filepath.Join(workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, mod.Version, matrixStr)),
+		})
+		if _, ok := locked[mod.Path]; !ok {
+			locked[mod.Path] = struct{}{}
+			lockPaths = append(lockPaths, mod.Path)
+		}
+	}
+
+	// Hold the same per-module-path locks as `llar make` while writing the
+	// workspace, so concurrent installs and source builds cannot replace each
+	// other's install dirs. Sort first to keep the lock order deadlock-free.
+	store, err := newRemoteStore()
+	if err != nil {
+		return moduleOutputResult{}, err
+	}
+	sort.Strings(lockPaths)
+	unlocks := make([]func(), 0, len(lockPaths))
+	for _, path := range lockPaths {
+		unlock, err := store.LockModule(path)
+		if err != nil {
+			for i := len(unlocks) - 1; i >= 0; i-- {
+				unlocks[i]()
+			}
+			return moduleOutputResult{}, fmt.Errorf("lock module %s: %w", path, err)
+		}
+		unlocks = append(unlocks, unlock)
+	}
+	defer func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}()
+
+	cache := build.NewLocalCache(workspaceDir)
+	var rootResult moduleOutputResult
+	deps := make([]moduleOutputDep, 0, len(targets)-1)
+	for _, target := range targets {
+		key := buildcache.Key{Module: target.mod, Matrix: matrixStr}
 		entry, ok, err := cache.Get(ctx, key)
 		if err != nil {
-			return moduleOutputResult{}, fmt.Errorf("read cache for artifact %s: %w", message.ID, err)
+			return moduleOutputResult{}, fmt.Errorf("read cache for artifact %s: %w", target.message.ID, err)
 		}
 		if !ok {
-			info, err := downloadInstallArtifact(ctx, http.DefaultClient, baseURL, message, installDir)
+			info, err := downloadInstallArtifact(ctx, http.DefaultClient, baseURL, target.message, target.installDir)
 			if err != nil {
-				return moduleOutputResult{}, fmt.Errorf("install artifact %s: %w", message.ID, err)
+				return moduleOutputResult{}, fmt.Errorf("install artifact %s: %w", target.message.ID, err)
 			}
-			entry, err = cache.Put(ctx, key, os.DirFS(installDir), buildcache.Entry{
+			entry, err = cache.Put(ctx, key, os.DirFS(target.installDir), buildcache.Entry{
 				Metadata: info.Metadata,
 				Deps:     info.Deps,
 			})
 			if err != nil {
-				return moduleOutputResult{}, fmt.Errorf("cache artifact %s: %w", message.ID, err)
+				return moduleOutputResult{}, fmt.Errorf("cache artifact %s: %w", target.message.ID, err)
 			}
 		}
-		if mod.Path == requested.Path {
+		if target.mod.Path == requested.Path {
 			rootResult = moduleOutputResult{
-				Module:    mod,
+				Module:    target.mod,
 				Metadata:  entry.Metadata,
-				OutputDir: installDir,
+				OutputDir: target.installDir,
 			}
 		} else {
-			deps = append(deps, moduleOutputDep{Module: mod, OutputDir: installDir})
+			deps = append(deps, moduleOutputDep{Module: target.mod, OutputDir: target.installDir})
 		}
 	}
 	rootResult.Deps = deps

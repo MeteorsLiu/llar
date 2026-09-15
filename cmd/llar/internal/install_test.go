@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -408,6 +410,102 @@ func TestInstallDownloadsRootAndDependencies(t *testing.T) {
 		t.Fatalf("JSON dependency = %+v", jsonResult.Deps[0])
 	}
 
+}
+
+type recordingLockStore struct {
+	locked  []string
+	unlocks int
+}
+
+func (*recordingLockStore) ModuleFS(context.Context, string) (fs.FS, error) {
+	return nil, errors.New("unexpected ModuleFS call")
+}
+
+func (s *recordingLockStore) LockModule(path string) (func(), error) {
+	s.locked = append(s.locked, path)
+	return func() { s.unlocks++ }, nil
+}
+
+func TestInstallLocksArtifactModules(t *testing.T) {
+	workspaceDir := isolatedWorkspaceDir(t)
+	matrix := hostMatrix()
+	matrixStr := matrix.Combinations()[0]
+	query := url.Values{
+		"arch": {runtime.GOARCH},
+		"os":   {runtime.GOOS},
+	}.Encode()
+	depID := "test/dep@v1.2.3?" + query
+	rootID := "test/root@v1.0.0?" + query
+	prepopulateCache(t, workspaceDir, "test/dep", "v1.2.3", matrixStr, "-ldep")
+	prepopulateCache(t, workspaceDir, "test/root", "v1.0.0", matrixStr, "-lroot")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-cmdjsonl")
+		writeInstallCommand(t, w, "artifact", map[string]any{
+			"id": rootID, "type": "tar.gz", "url": "http://example.invalid/root.tar.gz",
+		})
+		writeInstallCommand(t, w, "artifact", map[string]any{
+			"id": depID, "type": "zip", "url": "http://example.invalid/dep.zip",
+		})
+	}))
+	defer server.Close()
+
+	store := &recordingLockStore{}
+	withMockRemoteStore(t, store)
+
+	if _, err := install(context.Background(), nil, server.URL, "test/root", matrix); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"test/dep", "test/root"}
+	if !slices.Equal(store.locked, want) {
+		t.Fatalf("locked modules = %v, want %v", store.locked, want)
+	}
+	if store.unlocks != len(want) {
+		t.Fatalf("unlocks = %d, want %d", store.unlocks, len(want))
+	}
+}
+
+type failingLockStore struct {
+	recordingLockStore
+	failPath string
+}
+
+func (s *failingLockStore) LockModule(path string) (func(), error) {
+	if path == s.failPath {
+		return nil, errors.New("lock failed")
+	}
+	return s.recordingLockStore.LockModule(path)
+}
+
+func TestInstallReturnsLockError(t *testing.T) {
+	isolatedWorkspaceDir(t)
+	matrix := hostMatrix()
+	query := url.Values{
+		"arch": {runtime.GOARCH},
+		"os":   {runtime.GOOS},
+	}.Encode()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-cmdjsonl")
+		writeInstallCommand(t, w, "artifact", map[string]any{
+			"id": "test/root@v1.0.0?" + query, "type": "tar.gz", "url": "http://example.invalid/root.tar.gz",
+		})
+		writeInstallCommand(t, w, "artifact", map[string]any{
+			"id": "test/dep@v1.2.3?" + query, "type": "zip", "url": "http://example.invalid/dep.zip",
+		})
+	}))
+	defer server.Close()
+
+	store := &failingLockStore{failPath: "test/root"}
+	withMockRemoteStore(t, store)
+
+	_, err := install(context.Background(), nil, server.URL, "test/root", matrix)
+	if err == nil || !strings.Contains(err.Error(), "lock module test/root") {
+		t.Fatalf("install() error = %v, want lock error", err)
+	}
+	if store.unlocks != 1 {
+		t.Fatalf("unlocks = %d, want the already locked dep rolled back", store.unlocks)
+	}
 }
 
 func TestInstallSkipsCachedArtifacts(t *testing.T) {
