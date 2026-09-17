@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,8 +20,11 @@ import (
 	"time"
 
 	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/artifact/archiver"
+	buildcache "github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
@@ -437,6 +443,81 @@ func TestMakeLocal_RealDemoWithRemoteZlibDep(t *testing.T) {
 	}
 }
 
+type fakeCache struct {
+	entry buildcache.Entry
+	hit   bool
+	err   error
+	puts  int
+}
+
+func (c *fakeCache) Get(context.Context, buildcache.Key) (buildcache.Entry, bool, error) {
+	return c.entry, c.hit, c.err
+}
+
+func (c *fakeCache) Put(_ context.Context, _ buildcache.Key, _ fs.FS, entry buildcache.Entry) (buildcache.Entry, error) {
+	c.puts++
+	return entry, nil
+}
+
+func TestReadThroughCache(t *testing.T) {
+	remote := &fakeCache{}
+	local := &fakeCache{}
+	c := readThroughCache{remote: remote, local: local}
+	key := buildcache.Key{Module: module.Version{Path: "test/liba", Version: "1.0.0"}, Matrix: "amd64-linux"}
+	ctx := context.Background()
+
+	remote.entry = buildcache.Entry{Metadata: "-remote"}
+	remote.hit = true
+	if entry, ok, err := c.Get(ctx, key); err != nil || !ok || entry.Metadata != "-remote" {
+		t.Fatalf("remote hit Get = %+v, %v, %v", entry, ok, err)
+	}
+
+	remote.err = errors.New("remote failed")
+	if _, _, err := c.Get(ctx, key); !errors.Is(err, remote.err) {
+		t.Fatalf("remote error = %v, want %v", err, remote.err)
+	}
+	remote.err = nil
+
+	remote.hit = false
+	local.entry = buildcache.Entry{Metadata: "-local"}
+	local.hit = true
+	if entry, ok, err := c.Get(ctx, key); err != nil || !ok || entry.Metadata != "-local" {
+		t.Fatalf("local hit Get = %+v, %v, %v", entry, ok, err)
+	}
+
+	local.hit = false
+	if _, ok, err := c.Get(ctx, key); err != nil || ok {
+		t.Fatalf("miss Get = ok:%v err:%v", ok, err)
+	}
+
+	entry, err := c.Put(ctx, key, nil, buildcache.Entry{Metadata: "-built"})
+	if err != nil || entry.Metadata != "-built" || local.puts != 1 {
+		t.Fatalf("Put = %+v, %v; local puts = %d", entry, err, local.puts)
+	}
+}
+
+// TestBuildModule_WorkspaceDirError covers the failure to resolve the local
+// workspace that both the caches and the builder are injected with.
+func TestBuildModule_WorkspaceDirError(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	store := repo.NewOverlayStore(
+		repo.New(formulaDir, &noopVCSRepo{}),
+		map[string]string{"test/liba": filepath.Join(formulaDir, "test", "liba")},
+	)
+
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.WriteFile(home, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", "")
+
+	err := buildModule(context.Background(), store, "test/liba", "1.0.0", computeMatrix(), false)
+	if err == nil || !strings.Contains(err.Error(), "failed to get workspace dir") {
+		t.Fatalf("buildModule error = %v, want workspace dir error", err)
+	}
+}
+
 func TestMakeReal_InvalidModule(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -462,6 +543,89 @@ func TestMakeReal_NoVersion(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent module without version")
 	}
+}
+
+// TestMakeReal_ReusesPublishedArtifact verifies that `llar make` reuses a
+// published artifact from the public artifact origin instead of building from
+// source. GitHub source clones are disabled and the local formula installs no
+// files, so the restored artifact is the only source of the installed header.
+func TestMakeReal_ReusesPublishedArtifact(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	workspaceDir := isolatedWorkspaceDir(t)
+	blockGitHubClones(t)
+
+	matrixStr := computeMatrixStr()
+	installDir := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.3.1-%s", matrixStr))
+	servePublishedZlibArtifact(t, matrixStr, installDir)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(formulaDir)
+	defer os.Chdir(origDir)
+
+	out, err := runMakeCmd(t, "./madler/zlib@v1.3.1")
+	if err != nil {
+		t.Fatalf("llar make failed: %v", err)
+	}
+	if !strings.Contains(out, "-lz") {
+		t.Fatalf("metadata = %q, want -lz", out)
+	}
+	if _, err := os.Stat(filepath.Join(installDir, "include", "zlib.h")); err != nil {
+		t.Fatalf("published artifact not restored at %s: %v", installDir, err)
+	}
+}
+
+// servePublishedZlibArtifact starts a real HTTP origin that serves a real
+// zlib artifact for the given matrix and points the public artifact domain at
+// it.
+func servePublishedZlibArtifact(t *testing.T, matrixStr, installDir string) {
+	t.Helper()
+
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "include"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "include", "zlib.h"), []byte("zlib"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := metadata.Encode(metadata.Info{Metadata: "-L" + installDir + "/lib -lz"}, installDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "artifact.tar.gz")
+	if err := archiver.Pack(source, archive, meta); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	objectPath := fmt.Sprintf("/madler/zlib/v1.3.1/%s.tar.gz", matrixStr)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == objectPath {
+			_, _ = w.Write(body)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	originalDomain := publicKodoDomain
+	publicKodoDomain = server.URL
+	t.Cleanup(func() {
+		publicKodoDomain = originalDomain
+		server.Close()
+	})
+}
+
+// blockGitHubClones makes every github.com clone fail, so a passing build
+// proves the artifacts came from the install service instead of a source build.
+func blockGitHubClones(t *testing.T) {
+	t.Helper()
+	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	content := "[url \"https://127.0.0.1:1/\"]\n\tinsteadOf = https://github.com/\n"
+	if err := os.WriteFile(gitConfig, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
 }
 
 // TODO: resolve dynamic library symlink issue
