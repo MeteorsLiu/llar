@@ -22,6 +22,7 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact/archiver"
+	"github.com/goplus/llar/internal/build"
 	buildcache "github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
@@ -445,11 +446,12 @@ func TestMakeLocal_RealDemoWithRemoteZlibDep(t *testing.T) {
 }
 
 type fakeCache struct {
-	entry buildcache.Entry
-	hit   bool
-	err   error
-	gets  int
-	puts  int
+	entry  buildcache.Entry
+	hit    bool
+	err    error
+	gets   int
+	putErr error
+	puts   int
 }
 
 func (c *fakeCache) Get(context.Context, buildcache.Key) (buildcache.Entry, bool, error) {
@@ -459,6 +461,9 @@ func (c *fakeCache) Get(context.Context, buildcache.Key) (buildcache.Entry, bool
 
 func (c *fakeCache) Put(_ context.Context, _ buildcache.Key, _ fs.FS, entry buildcache.Entry) (buildcache.Entry, error) {
 	c.puts++
+	if c.putErr != nil {
+		return buildcache.Entry{}, c.putErr
+	}
 	return entry, nil
 }
 
@@ -466,6 +471,7 @@ func TestReadThroughCache(t *testing.T) {
 	key := buildcache.Key{Module: module.Version{Path: "test/liba", Version: "1.0.0"}, Matrix: "amd64-linux"}
 	ctx := context.Background()
 	localErr := errors.New("local failed")
+	localPutErr := errors.New("local put failed")
 	remoteErr := errors.New("remote failed")
 	tests := []struct {
 		name       string
@@ -474,6 +480,7 @@ func TestReadThroughCache(t *testing.T) {
 		want       buildcache.Entry
 		wantOK     bool
 		wantErr    error
+		localPuts  int
 		remoteGets int
 	}{
 		{
@@ -497,6 +504,15 @@ func TestReadThroughCache(t *testing.T) {
 			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
 			want:       buildcache.Entry{Metadata: "-remote"},
 			wantOK:     true,
+			localPuts:  1,
+			remoteGets: 1,
+		},
+		{
+			name:       "local write error after remote hit",
+			local:      &fakeCache{putErr: localPutErr},
+			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
+			wantErr:    localPutErr,
+			localPuts:  1,
 			remoteGets: 1,
 		},
 		{
@@ -523,6 +539,9 @@ func TestReadThroughCache(t *testing.T) {
 			if tt.local.gets != 1 || tt.remote.gets != tt.remoteGets {
 				t.Fatalf("Get calls = local:%d remote:%d, want local:1 remote:%d", tt.local.gets, tt.remote.gets, tt.remoteGets)
 			}
+			if tt.local.puts != tt.localPuts {
+				t.Fatalf("local Put calls = %d, want %d", tt.local.puts, tt.localPuts)
+			}
 		})
 	}
 
@@ -535,6 +554,34 @@ func TestReadThroughCache(t *testing.T) {
 			t.Fatalf("Put = %+v, %v; puts = local:%d remote:%d", entry, err, local.puts, remote.puts)
 		}
 	})
+}
+
+func TestReadThroughCachePersistsRemoteHit(t *testing.T) {
+	key := buildcache.Key{Module: module.Version{Path: "test/liba", Version: "1.0.0"}, Matrix: "amd64-linux"}
+	remote := &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true}
+	workspaceDir := t.TempDir()
+	c := readThroughCache{
+		remote: remote,
+		local:  build.NewLocalCache(workspaceDir),
+	}
+
+	entry, ok, err := c.Get(context.Background(), key)
+	if err != nil || !ok || entry.Metadata != "-remote" {
+		t.Fatalf("first Get = %+v, %v, %v", entry, ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, "test", "liba", ".cache.json")); err != nil {
+		t.Fatalf("local cache entry was not persisted: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		entry, ok, err := c.Get(context.Background(), key)
+		if err != nil || !ok || entry.Metadata != "-remote" {
+			t.Fatalf("cached Get %d = %+v, %v, %v", i+1, entry, ok, err)
+		}
+	}
+	if remote.gets != 1 {
+		t.Fatalf("remote Get calls = %d, want 1", remote.gets)
+	}
 }
 
 // TestBuildModule_WorkspaceDirError covers the failure to resolve the local
