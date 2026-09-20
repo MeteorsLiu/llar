@@ -65,7 +65,7 @@ func TestLoadBootstrapTarget(t *testing.T) {
 		},
 		{
 			name: "sysroot formula",
-			root: module.Version{Path: "bminor/glibc", Version: "glibc-2.24"},
+			root: module.Version{Path: "bminor/glibc", Version: "glibc-2.27"},
 		},
 	}
 	for _, tt := range tests {

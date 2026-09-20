@@ -14,7 +14,7 @@ import (
 
 const (
 	linuxSysrootPath     = "bminor/glibc"
-	linuxSysrootVersion  = "glibc-2.24"
+	linuxSysrootVersion  = "glibc-2.27"
 	darwinSysrootPath    = "joseluisq/macosx-sdks"
 	darwinSysrootVersion = "14.5"
 )

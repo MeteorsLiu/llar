@@ -489,7 +489,7 @@ func (s *suite) crossCompileZlib(ctx context.Context) error {
 		if strings.Contains(line, "--target=aarch64-linux-gnu") {
 			hasTarget = true
 		}
-		if strings.Contains(line, "bminor/glibc@glibc-2.24-") {
+		if strings.Contains(line, "bminor/glibc@glibc-2.27-") {
 			hasSysroot = true
 		}
 	}

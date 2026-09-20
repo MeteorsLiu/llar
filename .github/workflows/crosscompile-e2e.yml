@@ -41,21 +41,21 @@ jobs:
 
       - name: Download Bootlin glibc and musl arm64 toolchains
         run: |
-          default_archive="$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2"
-          custom_archive="$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2"
+          default_archive="$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2"
+          custom_archive="$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2"
           musl_archive="$RUNNER_TEMP/aarch64--musl--stable-2018.11-1.tar.bz2"
 
           curl --fail --location --retry 3 \
             "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2" \
-            --output "$default_archive"
+            --output "$custom_archive"
           curl --fail --location --retry 3 \
             "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2018.11-1.tar.bz2" \
-            --output "$custom_archive"
+            --output "$default_archive"
           curl --fail --location --retry 3 \
             "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--musl--stable-2018.11-1.tar.bz2" \
             --output "$musl_archive"
-          echo "530137589c4588599ebd115c12630c75e79c935ac4f34b0941404036f5e25026  $default_archive" | sha256sum --check
-          echo "abae0522480b9f37ff6cee4249e147e7cb78e1997cc6f76dba7e0fb8ec04221d  $custom_archive" | sha256sum --check
+          echo "530137589c4588599ebd115c12630c75e79c935ac4f34b0941404036f5e25026  $custom_archive" | sha256sum --check
+          echo "abae0522480b9f37ff6cee4249e147e7cb78e1997cc6f76dba7e0fb8ec04221d  $default_archive" | sha256sum --check
           echo "ce2d60c4f33cdc1c09ab8e10316b76639da71c4af1ab1948f3547fc05b814796  $musl_archive" | sha256sum --check
 
       - name: Prepare formula and source repositories
@@ -130,17 +130,17 @@ jobs:
           "$RUNNER_TEMP/llar" make madler/zlib@v1.3.1 \
             --os linux \
             --arch arm64 \
-            --require libc=glibc-2.27 \
+            --require libc=glibc-2.24 \
             --output "$RUNNER_TEMP/zlib-linux-arm64-custom-libc" \
             --json \
             --verbose \
             > "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json" \
             2> >(tee "$custom_log" >&2)
-          grep -F '"path":"bminor/glibc","version":"glibc-2.27"' \
+          grep -F '"path":"bminor/glibc","version":"glibc-2.24"' \
             "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json"
-          grep -E -- '--sysroot=[^ ]*/bminor/glibc@glibc-2\.27-' "$custom_log"
-          if grep -F -- 'bminor/glibc@glibc-2.24-' "$custom_log"; then
-            echo "custom libc build used the default glibc 2.24 sysroot" >&2
+          grep -E -- '--sysroot=[^ ]*/bminor/glibc@glibc-2\.24-' "$custom_log"
+          if grep -F -- 'bminor/glibc@glibc-2.27-' "$custom_log"; then
+            echo "custom libc build used the default glibc 2.27 sysroot" >&2
             exit 1
           fi
 
