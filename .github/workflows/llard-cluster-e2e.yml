@@ -58,16 +58,18 @@ jobs:
 
       - name: Build llard
         run: |
+          go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llar" ./cmd/llar
           go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llard" ./cmd/llard
           go build -o "$RUNNER_TEMP/llard-e2e-control" ./testdata/llard-e2e/control
 
-      - name: Download Bootlin glibc arm64 toolchain
+      - name: Prepare glibc arm64 sysroot with llar make
         run: |
-          archive="$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2"
-          curl --fail --location --retry 3 \
-            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2018.11-1.tar.bz2" \
-            --output "$archive"
-          echo "abae0522480b9f37ff6cee4249e147e7cb78e1997cc6f76dba7e0fb8ec04221d  $archive" | sha256sum --check
+          "$RUNNER_TEMP/llar" make bminor/glibc@glibc-2.27 \
+            --os linux \
+            --arch arm64 \
+            --output "$RUNNER_TEMP/glibc-sysroot" \
+            --verbose
+          tar -cJf "$RUNNER_TEMP/glibc-sysroot.tar.xz" -C "$RUNNER_TEMP/glibc-sysroot" .
 
       - name: Prepare formula and source repositories
         run: |
@@ -82,14 +84,14 @@ jobs:
           git -C "$formula_repo" add .
           git -C "$formula_repo" commit -m "LLARD E2E formulas"
 
-          cp testdata/crosscompile-e2e/install-bootlin-sysroot "$source_repo/install-sysroot"
-          cp "$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2" "$source_repo/"
+          cp testdata/crosscompile-e2e/install-sysroot "$source_repo/install-sysroot"
+          cp "$RUNNER_TEMP/glibc-sysroot.tar.xz" "$source_repo/sysroot.tar.xz"
           chmod +x "$source_repo/install-sysroot"
           git -C "$source_repo" init --initial-branch=main
           git -C "$source_repo" config user.email llard-e2e@example.com
           git -C "$source_repo" config user.name "LLARD E2E"
           git -C "$source_repo" add .
-          git -C "$source_repo" commit --quiet -m "Add glibc 2.27 toolchain"
+          git -C "$source_repo" commit --quiet -m "Add glibc 2.27 sysroot from llar make"
           git -C "$source_repo" tag glibc-2.27
 
           git config --global protocol.file.allow always
