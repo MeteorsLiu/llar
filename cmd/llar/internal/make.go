@@ -43,19 +43,31 @@ var newRemoteStore = func() (repo.Store, error) {
 // publicKodoDomain serves published build artifacts without credentials.
 var publicKodoDomain = "https://llarpackages.xgo.dev"
 
-// readThroughCache reads published artifacts from remote and falls back to the
-// local workspace cache, which also stores locally built artifacts.
+// readThroughCache reuses artifacts in the local workspace before fetching
+// published artifacts from remote. Remote hits are indexed in the workspace
+// cache so later commands can reuse the restored artifact without downloading
+// it again. Locally built artifacts are written only to the workspace cache.
 type readThroughCache struct {
 	remote buildcache.Cache
 	local  buildcache.Cache
 }
 
 func (c readThroughCache) Get(ctx context.Context, key buildcache.Key) (buildcache.Entry, bool, error) {
-	entry, ok, err := c.remote.Get(ctx, key)
+	entry, ok, err := c.local.Get(ctx, key)
 	if err != nil || ok {
 		return entry, ok, err
 	}
-	return c.local.Get(ctx, key)
+	entry, ok, err = c.remote.Get(ctx, key)
+	if err != nil || !ok {
+		return entry, ok, err
+	}
+	// The remote cache already restored the artifact into the shared workspace,
+	// so the local cache only needs to persist its entry.
+	entry, err = c.local.Put(ctx, key, nil, entry)
+	if err != nil {
+		return buildcache.Entry{}, false, err
+	}
+	return entry, true, nil
 }
 
 func (c readThroughCache) Put(ctx context.Context, key buildcache.Key, output fs.FS, entry buildcache.Entry) (buildcache.Entry, error) {

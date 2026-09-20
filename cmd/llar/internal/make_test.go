@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact/archiver"
+	"github.com/goplus/llar/internal/build"
 	buildcache "github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
@@ -444,55 +446,141 @@ func TestMakeLocal_RealDemoWithRemoteZlibDep(t *testing.T) {
 }
 
 type fakeCache struct {
-	entry buildcache.Entry
-	hit   bool
-	err   error
-	puts  int
+	entry  buildcache.Entry
+	hit    bool
+	err    error
+	gets   int
+	putErr error
+	puts   int
 }
 
 func (c *fakeCache) Get(context.Context, buildcache.Key) (buildcache.Entry, bool, error) {
+	c.gets++
 	return c.entry, c.hit, c.err
 }
 
 func (c *fakeCache) Put(_ context.Context, _ buildcache.Key, _ fs.FS, entry buildcache.Entry) (buildcache.Entry, error) {
 	c.puts++
+	if c.putErr != nil {
+		return buildcache.Entry{}, c.putErr
+	}
 	return entry, nil
 }
 
 func TestReadThroughCache(t *testing.T) {
-	remote := &fakeCache{}
-	local := &fakeCache{}
-	c := readThroughCache{remote: remote, local: local}
 	key := buildcache.Key{Module: module.Version{Path: "test/liba", Version: "1.0.0"}, Matrix: "amd64-linux"}
 	ctx := context.Background()
-
-	remote.entry = buildcache.Entry{Metadata: "-remote"}
-	remote.hit = true
-	if entry, ok, err := c.Get(ctx, key); err != nil || !ok || entry.Metadata != "-remote" {
-		t.Fatalf("remote hit Get = %+v, %v, %v", entry, ok, err)
+	localErr := errors.New("local failed")
+	localPutErr := errors.New("local put failed")
+	remoteErr := errors.New("remote failed")
+	tests := []struct {
+		name       string
+		local      *fakeCache
+		remote     *fakeCache
+		want       buildcache.Entry
+		wantOK     bool
+		wantErr    error
+		localPuts  int
+		remoteGets int
+	}{
+		{
+			name:       "local hit skips remote",
+			local:      &fakeCache{entry: buildcache.Entry{Metadata: "-local"}, hit: true},
+			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
+			want:       buildcache.Entry{Metadata: "-local"},
+			wantOK:     true,
+			remoteGets: 0,
+		},
+		{
+			name:       "local error skips remote",
+			local:      &fakeCache{err: localErr},
+			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
+			wantErr:    localErr,
+			remoteGets: 0,
+		},
+		{
+			name:       "remote hit after local miss",
+			local:      &fakeCache{},
+			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
+			want:       buildcache.Entry{Metadata: "-remote"},
+			wantOK:     true,
+			localPuts:  1,
+			remoteGets: 1,
+		},
+		{
+			name:       "local write error after remote hit",
+			local:      &fakeCache{putErr: localPutErr},
+			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
+			wantErr:    localPutErr,
+			localPuts:  1,
+			remoteGets: 1,
+		},
+		{
+			name:       "remote error after local miss",
+			local:      &fakeCache{},
+			remote:     &fakeCache{err: remoteErr},
+			wantErr:    remoteErr,
+			remoteGets: 1,
+		},
+		{
+			name:       "miss",
+			local:      &fakeCache{},
+			remote:     &fakeCache{},
+			remoteGets: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := readThroughCache{remote: tt.remote, local: tt.local}
+			entry, ok, err := c.Get(ctx, key)
+			if !errors.Is(err, tt.wantErr) || ok != tt.wantOK || !reflect.DeepEqual(entry, tt.want) {
+				t.Fatalf("Get = %+v, %v, %v; want %+v, %v, %v", entry, ok, err, tt.want, tt.wantOK, tt.wantErr)
+			}
+			if tt.local.gets != 1 || tt.remote.gets != tt.remoteGets {
+				t.Fatalf("Get calls = local:%d remote:%d, want local:1 remote:%d", tt.local.gets, tt.remote.gets, tt.remoteGets)
+			}
+			if tt.local.puts != tt.localPuts {
+				t.Fatalf("local Put calls = %d, want %d", tt.local.puts, tt.localPuts)
+			}
+		})
 	}
 
-	remote.err = errors.New("remote failed")
-	if _, _, err := c.Get(ctx, key); !errors.Is(err, remote.err) {
-		t.Fatalf("remote error = %v, want %v", err, remote.err)
-	}
-	remote.err = nil
+	t.Run("put writes only local", func(t *testing.T) {
+		remote := &fakeCache{}
+		local := &fakeCache{}
+		c := readThroughCache{remote: remote, local: local}
+		entry, err := c.Put(ctx, key, nil, buildcache.Entry{Metadata: "-built"})
+		if err != nil || entry.Metadata != "-built" || local.puts != 1 || remote.puts != 0 {
+			t.Fatalf("Put = %+v, %v; puts = local:%d remote:%d", entry, err, local.puts, remote.puts)
+		}
+	})
+}
 
-	remote.hit = false
-	local.entry = buildcache.Entry{Metadata: "-local"}
-	local.hit = true
-	if entry, ok, err := c.Get(ctx, key); err != nil || !ok || entry.Metadata != "-local" {
-		t.Fatalf("local hit Get = %+v, %v, %v", entry, ok, err)
+func TestReadThroughCachePersistsRemoteHit(t *testing.T) {
+	key := buildcache.Key{Module: module.Version{Path: "test/liba", Version: "1.0.0"}, Matrix: "amd64-linux"}
+	remote := &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true}
+	workspaceDir := t.TempDir()
+	c := readThroughCache{
+		remote: remote,
+		local:  build.NewLocalCache(workspaceDir),
 	}
 
-	local.hit = false
-	if _, ok, err := c.Get(ctx, key); err != nil || ok {
-		t.Fatalf("miss Get = ok:%v err:%v", ok, err)
+	entry, ok, err := c.Get(context.Background(), key)
+	if err != nil || !ok || entry.Metadata != "-remote" {
+		t.Fatalf("first Get = %+v, %v, %v", entry, ok, err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, "test", "liba", ".cache.json")); err != nil {
+		t.Fatalf("local cache entry was not persisted: %v", err)
 	}
 
-	entry, err := c.Put(ctx, key, nil, buildcache.Entry{Metadata: "-built"})
-	if err != nil || entry.Metadata != "-built" || local.puts != 1 {
-		t.Fatalf("Put = %+v, %v; local puts = %d", entry, err, local.puts)
+	for i := 0; i < 2; i++ {
+		entry, ok, err := c.Get(context.Background(), key)
+		if err != nil || !ok || entry.Metadata != "-remote" {
+			t.Fatalf("cached Get %d = %+v, %v, %v", i+1, entry, ok, err)
+		}
+	}
+	if remote.gets != 1 {
+		t.Fatalf("remote Get calls = %d, want 1", remote.gets)
 	}
 }
 
