@@ -4,7 +4,7 @@ fromVer "v1.3.1"
 
 onRequire (proj, deps) => {
 	if libc := target.require["libc"]; len(libc) > 0 {
-		if libc[0] == "glibc-2.27" {
+		if libc[0] == "glibc-2.24" {
 			deps.require "bminor/glibc", libc[0]
 		}
 	}
