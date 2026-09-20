@@ -58,43 +58,34 @@ jobs:
 
       - name: Build llard
         run: |
+          go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llar" ./cmd/llar
           go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llard" ./cmd/llard
           go build -o "$RUNNER_TEMP/llard-e2e-control" ./testdata/llard-e2e/control
+          go build -o "$RUNNER_TEMP/llard-e2e-seed" ./testdata/llard-e2e/seed
 
-      - name: Download Bootlin glibc arm64 toolchain
+      - name: Prepare glibc arm64 sysroot with llar make
         run: |
-          archive="$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2"
-          curl --fail --location --retry 3 \
-            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2018.11-1.tar.bz2" \
-            --output "$archive"
-          echo "abae0522480b9f37ff6cee4249e147e7cb78e1997cc6f76dba7e0fb8ec04221d  $archive" | sha256sum --check
+          XDG_CACHE_HOME="$RUNNER_TEMP/llard-cache" \
+            "$RUNNER_TEMP/llar" make bminor/glibc@glibc-2.27 \
+            --os linux \
+            --arch arm64 \
+            --json \
+            --verbose > "$RUNNER_TEMP/glibc-sysroot.json"
 
-      - name: Prepare formula and source repositories
+      - name: Prepare formula repository
         run: |
           formula_repo="$RUNNER_TEMP/llarhub"
-          source_repo="$RUNNER_TEMP/glibc-source"
-          mkdir -p "$formula_repo" "$source_repo"
+          mkdir -p "$formula_repo"
           cp -R testdata/kodo-e2e/formulas/. "$formula_repo/"
-          cp -R testdata/crosscompile-e2e/formulas/bminor "$formula_repo/"
+          cp -R "$RUNNER_TEMP/llard-cache/.llar/formulas/bminor" "$formula_repo/"
           git -C "$formula_repo" init --initial-branch=main
           git -C "$formula_repo" config user.email llard-e2e@example.com
           git -C "$formula_repo" config user.name "LLARD E2E"
           git -C "$formula_repo" add .
           git -C "$formula_repo" commit -m "LLARD E2E formulas"
 
-          cp testdata/crosscompile-e2e/install-bootlin-sysroot "$source_repo/install-sysroot"
-          cp "$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2" "$source_repo/"
-          chmod +x "$source_repo/install-sysroot"
-          git -C "$source_repo" init --initial-branch=main
-          git -C "$source_repo" config user.email llard-e2e@example.com
-          git -C "$source_repo" config user.name "LLARD E2E"
-          git -C "$source_repo" add .
-          git -C "$source_repo" commit --quiet -m "Add glibc 2.27 toolchain"
-          git -C "$source_repo" tag glibc-2.27
-
           git config --global protocol.file.allow always
           git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
-          git config --global url."file://$source_repo".insteadOf "https://github.com/bminor/glibc.git"
 
       - name: Run llard
         env:
@@ -115,6 +106,11 @@ jobs:
             prefix="$prefix/"
           fi
           prefix="${prefix}llard-cluster-e2e/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          if [ "${{ matrix.id }}" = "1" ]; then
+            XDG_CACHE_HOME="$RUNNER_TEMP/llard-cache" \
+              "$RUNNER_TEMP/llard-e2e-seed" "$prefix" < "$RUNNER_TEMP/glibc-sysroot.json"
+          fi
 
           runtime_dir="$RUNNER_TEMP/llard-worker"
           tracker_dir="$RUNNER_TEMP/llard-bin"
