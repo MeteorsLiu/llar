@@ -3,11 +3,9 @@ package modules
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -285,34 +283,9 @@ func TestLoad_EmptyVersion_LatestVersionTagsError(t *testing.T) {
 }
 
 func TestLoad_EmptyVersion_NoTagsUsesHeadRef(t *testing.T) {
-	realGit, err := exec.LookPath("git")
-	if err != nil {
-		t.Skip("git not found")
-	}
-	sourceDir := t.TempDir()
-	runGit := func(args ...string) string {
-		t.Helper()
-		cmd := exec.Command(realGit, args...)
-		cmd.Dir = sourceDir
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
-		}
-		return strings.TrimSpace(string(output))
-	}
-	runGit("init")
-	runGit("config", "user.name", "LLAR Test")
-	runGit("config", "user.email", "llar@example.com")
-	if err := os.WriteFile(filepath.Join(sourceDir, "source.txt"), []byte("source\n"), 0o644); err != nil {
-		t.Fatalf("write source: %v", err)
-	}
-	runGit("add", "source.txt")
-	runGit("commit", "-m", "initial")
-	runGit("tag", "1.0.0")
-	commitID := runGit("rev-parse", "HEAD")
-
+	const headRef = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 	fakeGitDir := t.TempDir()
-	fakeGit := fmt.Sprintf("#!/bin/sh\nif [ \"$3\" = \"HEAD\" ]; then\n  printf '%s\\tHEAD\\n'\nfi\n", commitID)
+	fakeGit := "#!/bin/sh\nif [ \"$3\" = \"HEAD\" ]; then\n  printf '" + headRef + "\\tHEAD\\n'\nfi\n"
 	if err := os.WriteFile(filepath.Join(fakeGitDir, "git"), []byte(fakeGit), 0o755); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
@@ -326,8 +299,8 @@ func TestLoad_EmptyVersion_NoTagsUsesHeadRef(t *testing.T) {
 	if len(modules) != 1 {
 		t.Fatalf("loaded modules = %d, want 1", len(modules))
 	}
-	if modules[0].Version != commitID {
-		t.Fatalf("main version = %q, want %q", modules[0].Version, commitID)
+	if modules[0].Version != headRef {
+		t.Fatalf("main version = %q, want %q", modules[0].Version, headRef)
 	}
 }
 
