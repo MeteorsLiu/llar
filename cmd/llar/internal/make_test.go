@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -447,10 +448,12 @@ type fakeCache struct {
 	entry buildcache.Entry
 	hit   bool
 	err   error
+	gets  int
 	puts  int
 }
 
 func (c *fakeCache) Get(context.Context, buildcache.Key) (buildcache.Entry, bool, error) {
+	c.gets++
 	return c.entry, c.hit, c.err
 }
 
@@ -460,40 +463,78 @@ func (c *fakeCache) Put(_ context.Context, _ buildcache.Key, _ fs.FS, entry buil
 }
 
 func TestReadThroughCache(t *testing.T) {
-	remote := &fakeCache{}
-	local := &fakeCache{}
-	c := readThroughCache{remote: remote, local: local}
 	key := buildcache.Key{Module: module.Version{Path: "test/liba", Version: "1.0.0"}, Matrix: "amd64-linux"}
 	ctx := context.Background()
-
-	remote.entry = buildcache.Entry{Metadata: "-remote"}
-	remote.hit = true
-	if entry, ok, err := c.Get(ctx, key); err != nil || !ok || entry.Metadata != "-remote" {
-		t.Fatalf("remote hit Get = %+v, %v, %v", entry, ok, err)
+	localErr := errors.New("local failed")
+	remoteErr := errors.New("remote failed")
+	tests := []struct {
+		name       string
+		local      *fakeCache
+		remote     *fakeCache
+		want       buildcache.Entry
+		wantOK     bool
+		wantErr    error
+		remoteGets int
+	}{
+		{
+			name:       "local hit skips remote",
+			local:      &fakeCache{entry: buildcache.Entry{Metadata: "-local"}, hit: true},
+			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
+			want:       buildcache.Entry{Metadata: "-local"},
+			wantOK:     true,
+			remoteGets: 0,
+		},
+		{
+			name:       "local error skips remote",
+			local:      &fakeCache{err: localErr},
+			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
+			wantErr:    localErr,
+			remoteGets: 0,
+		},
+		{
+			name:       "remote hit after local miss",
+			local:      &fakeCache{},
+			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
+			want:       buildcache.Entry{Metadata: "-remote"},
+			wantOK:     true,
+			remoteGets: 1,
+		},
+		{
+			name:       "remote error after local miss",
+			local:      &fakeCache{},
+			remote:     &fakeCache{err: remoteErr},
+			wantErr:    remoteErr,
+			remoteGets: 1,
+		},
+		{
+			name:       "miss",
+			local:      &fakeCache{},
+			remote:     &fakeCache{},
+			remoteGets: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := readThroughCache{remote: tt.remote, local: tt.local}
+			entry, ok, err := c.Get(ctx, key)
+			if !errors.Is(err, tt.wantErr) || ok != tt.wantOK || !reflect.DeepEqual(entry, tt.want) {
+				t.Fatalf("Get = %+v, %v, %v; want %+v, %v, %v", entry, ok, err, tt.want, tt.wantOK, tt.wantErr)
+			}
+			if tt.local.gets != 1 || tt.remote.gets != tt.remoteGets {
+				t.Fatalf("Get calls = local:%d remote:%d, want local:1 remote:%d", tt.local.gets, tt.remote.gets, tt.remoteGets)
+			}
+		})
 	}
 
-	remote.err = errors.New("remote failed")
-	if _, _, err := c.Get(ctx, key); !errors.Is(err, remote.err) {
-		t.Fatalf("remote error = %v, want %v", err, remote.err)
-	}
-	remote.err = nil
-
-	remote.hit = false
-	local.entry = buildcache.Entry{Metadata: "-local"}
-	local.hit = true
-	if entry, ok, err := c.Get(ctx, key); err != nil || !ok || entry.Metadata != "-local" {
-		t.Fatalf("local hit Get = %+v, %v, %v", entry, ok, err)
-	}
-
-	local.hit = false
-	if _, ok, err := c.Get(ctx, key); err != nil || ok {
-		t.Fatalf("miss Get = ok:%v err:%v", ok, err)
-	}
-
-	entry, err := c.Put(ctx, key, nil, buildcache.Entry{Metadata: "-built"})
-	if err != nil || entry.Metadata != "-built" || local.puts != 1 {
-		t.Fatalf("Put = %+v, %v; local puts = %d", entry, err, local.puts)
-	}
+	t.Run("put writes only local", func(t *testing.T) {
+		remote := &fakeCache{}
+		local := &fakeCache{}
+		c := readThroughCache{remote: remote, local: local}
+		entry, err := c.Put(ctx, key, nil, buildcache.Entry{Metadata: "-built"})
+		if err != nil || entry.Metadata != "-built" || local.puts != 1 || remote.puts != 0 {
+			t.Fatalf("Put = %+v, %v; puts = local:%d remote:%d", entry, err, local.puts, remote.puts)
+		}
+	})
 }
 
 // TestBuildModule_WorkspaceDirError covers the failure to resolve the local
